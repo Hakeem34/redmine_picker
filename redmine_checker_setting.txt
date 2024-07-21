@@ -1,0 +1,29 @@
+#
+URL             : http://localhost:3000/
+#API KEY         : XXXXXXXXXXXXXXXXXXXXXX
+
+TARGET PROJECT  : TestProject
+TARGET PROJECT  : TestSubProject
+
+OUT FILE NAME   : redmine_result_%ymd_%hms.xlsx
+
+ISSUE LIST ATTR : id
+ISSUE LIST ATTR : project
+ISSUE LIST ATTR : parent
+ISSUE LIST ATTR : tracker
+ISSUE LIST ATTR : subject
+ISSUE LIST ATTR : status
+ISSUE LIST ATTR : priority
+ISSUE LIST ATTR : author
+ISSUE LIST ATTR : created_on
+ISSUE LIST ATTR : assigned_to
+ISSUE LIST ATTR : updated_on
+ISSUE LIST ATTR : closed_on
+ISSUE LIST ATTR : due_date
+ISSUE LIST ATTR : done_ratio
+ISSUE LIST ATTR : estimated_hours
+ISSUE LIST ATTR : total_spent_hours
+
+
+
+
