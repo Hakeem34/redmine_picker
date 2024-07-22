@@ -3,7 +3,8 @@ URL             : http://localhost:3000/
 #API KEY         : XXXXXXXXXXXXXXXXXXXXXX
 
 TARGET PROJECT  : TestProject
-TARGET PROJECT  : TestSubProject
+TARGET PROJECT  : Redmineスクリプト
+INCLUDE SUB PRJ : 1
 
 OUT FILE NAME   : redmine_result_%ymd_%hms.xlsx
 

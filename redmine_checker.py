@@ -21,13 +21,15 @@ g_opt_list_attrs      = []
 g_opt_list_cfs        = []
 g_opt_out_file        = 'redmine_result_%ymd.xlsx'
 g_opt_target_projects = []
+g_opt_include_sub_prj = 1
 
-
-g_user_list        = []
-g_cf_type_list     = []
-g_issue_list       = []
-g_time_entry_list  = []
-g_filter_limit     = 20
+g_target_project_ids = []
+g_user_list          = []
+g_cf_type_list       = []
+g_status_type_list   = []
+g_issue_list         = []
+g_time_entry_list    = []
+g_filter_limit       = 20
 
 
 ATTR_NAME_DIC      = {
@@ -139,6 +141,17 @@ class cCustomFieledType:
         return
 
 
+class cIssueStatusType:
+    def __init__(self, status):
+        self.id         = status.id
+        self.name       = status.name
+        self.is_closed  = status.is_closed
+        return
+
+
+#/*****************************************************************************/
+#/* チケットデータクラス                                                      */
+#/*****************************************************************************/
 class cIssueData:
     def __init__(self, id):
         self.id                = id
@@ -163,6 +176,9 @@ class cIssueData:
         self.custom_fields     = []
         return
 
+    #/*****************************************************************************/
+    #/* 表示用の属性値取得                                                        */
+    #/*****************************************************************************/
     def get_disp_attr(self, attribute):
         if (attribute == 'author') or (attribute == 'assigned_to'):
             object = getattr(self, attribute)
@@ -172,125 +188,125 @@ class cIssueData:
             return object
 
 
+    #/*****************************************************************************/
+    #/* python-redmineからチケット情報の読み出し                                  */
+    #/*****************************************************************************/
+    def read_issue_data(self, issue):
+        self.project = issue.project.name
+        if (hasattr(issue, 'parent')):
+            self.parent  = issue.parent.id
+        else:
+            self.parent  = 0
+
+        self.subject           = issue.subject
+        self.priority          = issue.priority.name
+        self.tracker           = issue.tracker.name
+        self.subject           = issue.subject
+        self.status            = issue.status.name
+        self.author            = get_user_data_by_id(issue.author.id)
+
+        if (hasattr(issue, 'assigned_to')):
+            self.assigned_to   = get_user_data_by_id(issue.assigned_to.id)
+        else:
+            self.assigned_to   = NONE_USER
+
+        self.created_on        = issue.created_on
+        self.updated_on        = issue.updated_on
+
+        if (hasattr(issue, 'closed_on')):
+            self.closed_on         = issue.closed_on
+        else:
+            self.closed_on         = "-"
+
+        self.start_date        = issue.start_date
+        self.done_ratio        = issue.done_ratio
+        self.due_date          = issue.due_date
+        self.estimated_hours   = issue.estimated_hours
+
+        #/* カスタムフィールドの取得 */
+        for cf in issue.custom_fields:
+            cf_data = cCustomFieledData(cf)
+            self.custom_fields.append(cf_data)
+
+        #/* 更新情報の取得 */
+        for journal in issue.journals:
+            journal_data = cJournalData(journal.id, journal.created_on, get_user_data_by_id(journal.user.id))
+            for detail in journal.details:
+                detail_data = cDetailData(detail)
+                journal_data.details.append(detail_data)
+
+            journal_data.notes = journal.notes
+            self.journals.append(journal_data)
+
+        #/* 作業時間情報の取得 */
+        total_spent_hours = 0
+        for time_entry in issue.time_entries:
+            te_data = find_time_entry(time_entry)
+            if (te_data != None):
+                self.time_entries.append(te_data)
+                total_spent_hours += te_data.hours
+
+        #/* total_spent_hoursがサポートされない場合は、time_entriesの合計値とする（本来は、子チケットの時間も集計するようだが・・・） */
+        if (hasattr(issue, 'total_spent_hours')):
+            self.total_spent_hours = issue.total_spent_hours
+        else:
+            self.total_spent_hours = total_spent_hours
+
+        return
+
+
+    #/*****************************************************************************/
+    #/* チケット情報のログ出力                                                    */
+    #/*****************************************************************************/
+    def print_issue_data(self):
+        print("--------------------------------- Issue ID : %d ---------------------------------" % (self.id))
+        print("  Project         : %s" % (self.project))
+        print("  Tracker         : %s" % (self.tracker))
+        print("  Subject         : %s" % (self.subject))
+        print("  Status          : %s" % (self.status))
+        print("  Parent          : %s" % (self.parent))
+        print("  Priority        : %s" % (self.priority))
+        print("  Author          : %s" % (self.author.name))
+        print("  AssignedTo      : %s" % (self.assigned_to.name))
+        print("  CreatedOn       : %s" % (self.created_on))
+        print("  UpdatedOn       : %s" % (self.updated_on))
+        print("  ClosedOn        : %s" % (self.closed_on))
+        print("  StartDate       : %s" % (self.start_date))
+        print("  DueDate         : %s" % (self.due_date))
+        print("  DoneRatio       : %s" % (self.done_ratio))
+        print("  EstimatedHours  : %s" % (self.estimated_hours))
+        print("  TotalSpentHours : %s" % (self.total_spent_hours))
+        print("  CustomFields    : ")
+
+        for cf_data in self.custom_fields:
+            print("[%s][%s]:%s" % (cf_data.id, cf_data.name, cf_data.get_disp_value()))
+
+        for te_data in self.time_entries:
+            print("  Time Entry[%s][%s]:%s hours in %s by %s" % (te_data.id, te_data.created_on, te_data.hours, te_data.spent_on, te_data.user.name))
+
+        for journal_data in self.journals:
+            print("  Update[%s][%s]:%s" % (journal_data.id, journal_data.created_on, journal_data.user.name))
+            for detail_data in journal_data.details:
+                print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, detail_data.old_val, detail_data.new_val))
+
+        return
+
+
+
 #/*****************************************************************************/
 #/* チケット情報の読み出し                                                    */
 #/*****************************************************************************/
-def get_issue_data(issue_id):
+def get_issue_data(issue):
     global g_issue_list
 
     for issue_data in g_issue_list:
-        if (issue_id == issue_data.id):
+        if (issue.id == issue_data.id):
             return issue_data
 
-    issue_data = cIssueData(issue_id)
+    issue_data = cIssueData(issue.id)
+    issue_data.read_issue_data(issue)
     g_issue_list.append(issue_data)
     return issue_data
-
-
-#/*****************************************************************************/
-#/* チケット情報の読み出し                                                    */
-#/*****************************************************************************/
-def print_issue_data(issue_data):
-    print("--------------------------------- Issue ID : %d ---------------------------------" % (issue_data.id))
-    print("  Project         : %s" % (issue_data.project))
-    print("  Tracker         : %s" % (issue_data.tracker))
-    print("  Subject         : %s" % (issue_data.subject))
-    print("  Status          : %s" % (issue_data.status))
-    print("  Parent          : %s" % (issue_data.parent))
-    print("  Priority        : %s" % (issue_data.priority))
-    print("  Author          : %s" % (issue_data.author.name))
-    print("  AssignedTo      : %s" % (issue_data.assigned_to.name))
-    print("  CreatedOn       : %s" % (issue_data.created_on))
-    print("  UpdatedOn       : %s" % (issue_data.updated_on))
-    print("  ClosedOn        : %s" % (issue_data.closed_on))
-    print("  StartDate       : %s" % (issue_data.start_date))
-    print("  DueDate         : %s" % (issue_data.due_date))
-    print("  DoneRatio       : %s" % (issue_data.done_ratio))
-    print("  EstimatedHours  : %s" % (issue_data.estimated_hours))
-    print("  TotalSpentHours : %s" % (issue_data.total_spent_hours))
-    print("  CustomFields    : ")
-
-    for cf_data in issue_data.custom_fields:
-        print("[%s][%s]:%s" % (cf_data.id, cf_data.name, cf_data.get_disp_value()))
-
-    for te_data in issue_data.time_entries:
-        print("  Time Entry[%s][%s]:%s hours in %s by %s" % (te_data.id, te_data.created_on, te_data.hours, te_data.spent_on, te_data.user.name))
-
-    for journal_data in issue_data.journals:
-        print("  Update[%s][%s]:%s" % (journal_data.id, journal_data.created_on, journal_data.user.name))
-        for detail_data in journal_data.details:
-            print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, detail_data.old_val, detail_data.new_val))
-
-    return
-
-
-#/*****************************************************************************/
-#/* チケット情報の読み出し                                                    */
-#/*****************************************************************************/
-def read_issue_data(issue):
-    issue_data = get_issue_data(issue.id)
-    issue_data.project = issue.project.name
-    if (hasattr(issue, 'parent')):
-        issue_data.parent  = issue.parent.id
-#       print("type parent is : " + str(type(issue_data.parent)))
-    else:
-        issue_data.parent  = 0
-
-    issue_data.subject           = issue.subject
-    issue_data.priority          = issue.priority.name
-#   print("type priority is : " + str(type(issue_data.priority)))
-    issue_data.tracker           = issue.tracker.name
-    issue_data.subject           = issue.subject
-    issue_data.status            = issue.status.name
-    issue_data.author            = get_user_data(issue.author)
-#   print("type author is : " + str(type(issue_data.author)))
-
-    if (hasattr(issue, 'assigned_to')):
-        issue_data.assigned_to   = get_user_data(issue.assigned_to)
-    else:
-        issue_data.assigned_to   = NONE_USER
-
-    issue_data.created_on        = issue.created_on
-    issue_data.updated_on        = issue.updated_on
-    issue_data.closed_on         = issue.closed_on
-    issue_data.start_date        = issue.start_date
-    issue_data.done_ratio        = issue.done_ratio
-    issue_data.due_date          = issue.due_date
-    issue_data.estimated_hours   = issue.estimated_hours
-    issue_data.total_spent_hours = issue.total_spent_hours
-
-    for cf in issue.custom_fields:
-#       print(cf)
-#       print(dir(cf))
-        cf_data = cCustomFieledData(cf)
-        issue_data.custom_fields.append(cf_data)
-
-    for journal in issue.journals:
-#       print(journal)
-#       print(dir(journal))
-#       print("[%s][%s]%s" % (journal.id, journal.created_on, journal.user.name))
-        journal_data = cJournalData(journal.id, journal.created_on, get_user_data_by_id(journal.user.id))
-        for detail in journal.details:
-#           print("---detail---")
-#           print(detail)
-#           print(dir(detail))
-#           for key in detail.keys():
-#               print(key)
-            detail_data = cDetailData(detail)
-            journal_data.details.append(detail_data)
-
-        journal_data.notes = journal.notes
-        issue_data.journals.append(journal_data)
-
-    for time_entry in issue.time_entries:
-        te_data = find_time_entry(time_entry)
-        if (te_data != None):
-            issue_data.time_entries.append(te_data)
-        else:
-            print("time entry not found! id = %s" % (time_entry.id))
-
-    print_issue_data(issue_data)
-    return
 
 
 #/*****************************************************************************/
@@ -350,9 +366,10 @@ def find_time_entry(te):
 #/*****************************************************************************/
 #/* ユーザー情報の登録                                                        */
 #/*****************************************************************************/
-def get_user_data(user):
+def get_user_data(redmine, user):
     global g_user_list
     global g_time_entry_list
+    global g_target_project_ids
 
     if (user == None):
         return cUserData(0, "不明なユーザー")
@@ -363,17 +380,17 @@ def get_user_data(user):
 
     user_data = cUserData(user.id, user.name)
 
-    for time_entry in user.time_entries:
-#       print(time_entry)
-#       print(dir(time_entry))
-        te = cTimeEntryData(time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user)
-        te.project_name = time_entry.project.name
-        te.issue_id     = time_entry.issue.id
-        te.updated_on   = time_entry.updated_on
-        te.activity     = time_entry.activity
-        print("TimeEntry[%s][%s]spent on : %s  %s hours by %s for #%s in %s, activity : %s" % (time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user.name, time_entry.issue.id, time_entry.project.name, time_entry.activity))
-        user_data.time_entries.append(te)
-        g_time_entry_list.append(te)
+    for target_id in g_target_project_ids:
+        time_entries = redmine.time_entry.filter(project_id = target_id, user_id = user.id)
+        for time_entry in time_entries:
+            te = cTimeEntryData(time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user)
+            te.project_name = time_entry.project.name
+            te.issue_id     = time_entry.issue.id
+            te.updated_on   = time_entry.updated_on
+            te.activity     = time_entry.activity
+            print("TimeEntry[%s][%s]spent on : %s  %s hours by %s for #%s in %s, activity : %s" % (time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user.name, time_entry.issue.id, time_entry.project.name, time_entry.activity))
+            user_data.time_entries.append(te)
+            g_time_entry_list.append(te)
 
     g_user_list.append(user_data)
     print("New user! [%d]:%s" % (user_data.id, user_data.name))
@@ -403,6 +420,7 @@ def read_setting_file(file_path):
     global g_opt_target_projects
     global g_opt_out_file
     global g_opt_list_attrs
+    global g_opt_include_sub_prj
 
     f = open(file_path, 'r')
     lines = f.readlines()
@@ -412,23 +430,22 @@ def read_setting_file(file_path):
     re_opt_out_file   = re.compile(r"OUT FILE NAME\s+: ([^\n]+)")
     re_opt_tgt_prj    = re.compile(r"TARGET PROJECT\s+: ([^\n]+)")
     re_opt_list_att   = re.compile(r"ISSUE LIST ATTR\s+: ([^\n]+)")
+    re_opt_sub_prj    = re.compile(r"INCLUDE SUB PRJ\s+: ([^\n]+)")
 
     for line in lines:
 #       print ("line:%s" % line)
         if (result := re_opt_url.match(line)):
             g_opt_url = result.group(1)
         elif (result := re_opt_api_key.match(line)):
-#           print("api key : %s" % (result.group(1)))
             g_opt_api_key = result.group(1)
         elif (result := re_opt_tgt_prj.match(line)):
-#           print("target project : %s" % (result.group(1)))
             g_opt_target_projects.append(result.group(1))
         elif (result := re_opt_out_file.match(line)):
-#           print("output file : %s" % (result.group(1)))
             g_opt_out_file = result.group(1)
         elif (result := re_opt_list_att.match(line)):
-#           print("attr : %s" % (result.group(1)))
             g_opt_list_attrs.append(result.group(1))
+        elif (result := re_opt_sub_prj.match(line)):
+            g_opt_include_sub_prj = int(result.group(1))
 
     f.close()
     return
@@ -515,25 +532,36 @@ def log_end(start_time):
 
 
 #/*****************************************************************************/
-#/* ユーザー情報の取得                                                        */
+#/* プロジェクト情報の取得                                                    */
 #/*****************************************************************************/
-def check_project_member_ships(redmine):
+def check_project_info(redmine):
     global g_opt_target_projects
+    global g_target_project_ids
 
-    print("--------------------------------- Check User Datas ---------------------------------")
+    print("--------------------------------- Check Project Datas ---------------------------------")
     projects = redmine.project.all()
 
-    #/* 対象プロジェクトからユーザー情報を取得 */
+    #/* 対象プロジェクトからIDを取得 */
     for project in projects:
-#       print(project.name)
-#       print(dir(project))
         for target in g_opt_target_projects:
             if (target == project.name):
-                for member_ship in project.memberships:
-#                   print(dir(member_ship))
-                    if (hasattr(member_ship, 'user')):
-#                       print(dir(member_ship.user))
-                        get_user_data(member_ship.user)
+                g_target_project_ids.append(project.id)
+                print("ID[%d] : %s" % (project.id, target))
+
+    return
+
+
+#/*****************************************************************************/
+#/* ユーザー情報の取得                                                        */
+#/*****************************************************************************/
+def check_user_info(redmine):
+    print("--------------------------------- Check User Datas ---------------------------------")
+    users = redmine.user.all()
+
+    #/* 対象プロジェクトからユーザー情報を取得 */
+    for user in users:
+        user.name = user.lastname + ' ' + user.firstname
+        get_user_data(redmine, user)
 
     return
 
@@ -547,18 +575,29 @@ def check_custom_fields(redmine):
     print("--------------------------------- Check Custome Fields ---------------------------------")
     fields = redmine.custom_field.all()
     for cf in fields:
-#       print(cf)
-#       print(dir(cf))
-#       if (cf.field_format == 'enumeration'):
-#           print(cf.possible_values)
-#       print(cf.customized_type)
-#       print(cf.field_format)
         cf_type = cCustomFieledType(cf)
         if (cf_type.type == "issue"):
             print("Custom Field[%s][%s]:%s" % (cf_type.id, cf_type.name, cf_type.format))
             g_cf_type_list.append(cf_type)
 
     return
+
+
+#/*****************************************************************************/
+#/* チケットステータス情報の取得                                              */
+#/*****************************************************************************/
+def check_issue_status(redmine):
+    global g_status_type_list
+
+    statuses = redmine.issue_status.all()
+
+    print("--------------------------------- Check Issue Status Types ---------------------------------")
+    for status in statuses:
+#       print(status)
+#       print(dir(status))
+        status_type = cIssueStatusType(status)
+        print("[%s][%s] is_closed : %d" % (status_type.id, status_type.name, status_type.is_closed))
+        g_status_type_list.append(status_type)
 
 
 #/*****************************************************************************/
@@ -618,6 +657,35 @@ def output_datas():
     return
 
 
+
+#/*****************************************************************************/
+#/* チケット全確認                                                            */
+#/*****************************************************************************/
+def full_issue_check(redmine):
+    global g_filter_limit
+    global g_opt_include_sub_prj
+
+    print("--------------------------------- Full Issue Check ---------------------------------")
+    for target_id in g_target_project_ids:
+        filter_offset = 0
+        while(1):
+            print("--------------------------------- ProjectID : %d, Filter Offset %d ---------------------------------" % (target_id, filter_offset))
+            if (g_opt_include_sub_prj == 0):
+                issues = redmine.issue.filter(project_id = target_id, subproject_id = '!*', status_id = '*', limit = g_filter_limit, offset = filter_offset)
+            else:
+                issues = redmine.issue.filter(project_id = target_id, status_id = '*', limit = g_filter_limit, offset = filter_offset)
+            if (len(issues) == 0):
+                break
+
+            for issue in issues:
+                issue_data = get_issue_data(issue)
+                issue_data.print_issue_data()
+
+            filter_offset += g_filter_limit
+
+    return
+
+
 #/*****************************************************************************/
 #/* メイン関数                                                                */
 #/*****************************************************************************/
@@ -636,26 +704,13 @@ def main():
     else:
         redmine = Redmine(g_opt_url, key=g_opt_api_key)
 
-    check_project_member_ships(redmine)
+    check_project_info(redmine)
+    check_user_info(redmine)
     check_custom_fields(redmine)
+    check_issue_status(redmine)
 
     if (g_opt_full_issues):
-        print("--------------------------------- Full Issue Check ---------------------------------")
-        filter_offset = 0
-        while(1):
-            print("--------------------------------- Filter Offset %d ---------------------------------" % (filter_offset))
-            issues = redmine.issue.filter(status_id = '*', limit = g_filter_limit, offset = filter_offset)
-            if (len(issues) == 0):
-                break
-
-            for issue in issues:
-#               print(issue.id)
-#               print(dir(issue))
-                read_issue_data(issue)
-
-            filter_offset += g_filter_limit
-
-        issue = redmine.issue.get(12)
+        full_issue_check(redmine)
     else:
         pass
 
