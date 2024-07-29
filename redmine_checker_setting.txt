@@ -6,11 +6,15 @@ TARGET PROJECT  : TestProject
 TARGET PROJECT  : Redmineスクリプト
 INCLUDE SUB PRJ : 1
 
+TARGET JOURNAL  : notes
+TARGET JOURNAL  : status_change
+
 OUT FILE NAME   : redmine_result_%ymd_%hms.xlsx
 
 ISSUE LIST ATTR : id
 ISSUE LIST ATTR : project
 ISSUE LIST ATTR : parent
+ISSUE LIST ATTR : children
 ISSUE LIST ATTR : tracker
 ISSUE LIST ATTR : subject
 ISSUE LIST ATTR : status

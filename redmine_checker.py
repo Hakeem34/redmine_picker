@@ -37,6 +37,7 @@ ATTR_NAME_DIC      = {
                          'project'           : 'プロジェクト',
                          'tracker'           : 'トラッカー',
                          'parent'            : '親チケット',
+                         'children'          : '子チケット',
                          'status'            : 'ステータス',
                          'subject'           : 'タイトル',
                          'author'            : '作成者',
@@ -49,9 +50,13 @@ ATTR_NAME_DIC      = {
                          'done_ratio'        : '進捗率',
                          'estimated_hours'   : '予定工数',
                          'total_spent_hours' : '作業時間',
+                         'journals'          : '更新データ',
                      }
 
 
+#/*****************************************************************************/
+#/* 作業時間クラス                                                            */
+#/*****************************************************************************/
 class cTimeEntryData:
     def __init__(self, id, created_on, spent_on, hours, user_data):
         self.id           = id
@@ -66,6 +71,9 @@ class cTimeEntryData:
         return
 
 
+#/*****************************************************************************/
+#/* チケット更新の詳細データクラス                                            */
+#/*****************************************************************************/
 class cDetailData:
     def __init__(self, detail):
         self.property   = detail.get('property')
@@ -74,17 +82,30 @@ class cDetailData:
         self.new_val    = detail.get('new_value')
         return
 
+    def is_status_change(self):
+        if (self.property == 'attr') and (self.name == 'status'):
+            return 1
 
+        return 0
+
+
+#/*****************************************************************************/
+#/* チケット更新データクラス                                                  */
+#/*****************************************************************************/
 class cJournalData:
     def __init__(self, id, created_on, user_data):
-        self.id         = id
-        self.created_on = created_on
-        self.user       = user_data
-        self.details    = []
-        self.notes      = ""
+        self.id               = id
+        self.created_on       = created_on
+        self.user             = user_data
+        self.details          = []
+        self.notes            = ""
+        self.is_status_change = 0
         return
 
 
+#/*****************************************************************************/
+#/* ユーザーデータクラス                                                      */
+#/*****************************************************************************/
 class cUserData:
     def __init__(self, id, name):
         self.id           = id
@@ -95,6 +116,9 @@ class cUserData:
 NONE_USER = cUserData(0, "-")
 
 
+#/*****************************************************************************/
+#/* カスタムフィールドデータクラス                                            */
+#/*****************************************************************************/
 class cCustomFieledData:
     def __init__(self, cf):
         self.id    = cf.id
@@ -125,6 +149,9 @@ class cCustomFieledData:
 
 
 
+#/*****************************************************************************/
+#/* カスタムフィールドの型情報クラス                                          */
+#/*****************************************************************************/
 class cCustomFieledType:
     def __init__(self, cf):
         self.id         = cf.id
@@ -141,11 +168,14 @@ class cCustomFieledType:
         return
 
 
+#/*****************************************************************************/
+#/* チケットステータス情報クラス                                              */
+#/*****************************************************************************/
 class cIssueStatusType:
     def __init__(self, status):
         self.id         = status.id
         self.name       = status.name
-        self.is_closed  = status.is_closed
+        self.is_closed  = getattr(status, 'is_closed', 0)
         return
 
 
@@ -157,6 +187,7 @@ class cIssueData:
         self.id                = id
         self.project           = ""
         self.parent            = ""
+        self.children          = []
         self.priority          = ""
         self.tracker           = ""
         self.subject           = ""
@@ -183,6 +214,9 @@ class cIssueData:
         if (attribute == 'author') or (attribute == 'assigned_to'):
             object = getattr(self, attribute)
             return object.name
+        elif (attribute == 'children'):
+            text = ",".join(map(str,self.children))
+            return text
         else:
             object = getattr(self, attribute)
             return object
@@ -193,35 +227,31 @@ class cIssueData:
     #/*****************************************************************************/
     def read_issue_data(self, issue):
         self.project = issue.project.name
-        if (hasattr(issue, 'parent')):
-            self.parent  = issue.parent.id
-        else:
-            self.parent  = 0
+
+        
+        self.parent            = getattr_ex(issue, 'parent', 'id', 0)
+
+        children               = getattr(issue, 'children', [])
+        for child in children:
+            self.children.append(child.id)
 
         self.subject           = issue.subject
         self.priority          = issue.priority.name
         self.tracker           = issue.tracker.name
-        self.subject           = issue.subject
         self.status            = issue.status.name
         self.author            = get_user_data_by_id(issue.author.id)
 
-        if (hasattr(issue, 'assigned_to')):
-            self.assigned_to   = get_user_data_by_id(issue.assigned_to.id)
-        else:
-            self.assigned_to   = NONE_USER
+        assigned_user          = getattr(issue, 'assigned_to', NONE_USER)
+        self.assigned_to       = get_user_data_by_id(assigned_user.id)
 
-        self.created_on        = issue.created_on
-        self.updated_on        = issue.updated_on
+        self.created_on        = getattr(issue, 'created_on', "-")
+        self.updated_on        = getattr(issue, 'updated_on', "-")
 
-        if (hasattr(issue, 'closed_on')):
-            self.closed_on         = issue.closed_on
-        else:
-            self.closed_on         = "-"
-
-        self.start_date        = issue.start_date
-        self.done_ratio        = issue.done_ratio
-        self.due_date          = issue.due_date
-        self.estimated_hours   = issue.estimated_hours
+        self.closed_on         = getattr(issue, 'closed_on', "-")
+        self.start_date        = getattr(issue, 'start_date', "-")
+        self.done_ratio        = getattr(issue, 'done_ratio', 0)
+        self.due_date          = getattr(issue, 'due_date', "-")
+        self.estimated_hours   = getattr(issue, 'estimated_hours', 0)
 
         #/* カスタムフィールドの取得 */
         for cf in issue.custom_fields:
@@ -229,22 +259,26 @@ class cIssueData:
             self.custom_fields.append(cf_data)
 
         #/* 更新情報の取得 */
-        for journal in issue.journals:
-            journal_data = cJournalData(journal.id, journal.created_on, get_user_data_by_id(journal.user.id))
-            for detail in journal.details:
-                detail_data = cDetailData(detail)
-                journal_data.details.append(detail_data)
+        if (hasattr(issue, 'journals')):
+            for journal in issue.journals:
+                journal_data = cJournalData(journal.id, journal.created_on, get_user_data_by_id(journal.user.id))
+                for detail in journal.details:
+                    detail_data = cDetailData(detail)
+                    journal_data.details.append(detail_data)
+                    if (detail_data.is_status_change()):
+                        journal_data.is_status_change = 1
 
-            journal_data.notes = journal.notes
-            self.journals.append(journal_data)
+                journal_data.notes = getattr(journal, 'notes', "")
+                self.journals.append(journal_data)
 
         #/* 作業時間情報の取得 */
         total_spent_hours = 0
-        for time_entry in issue.time_entries:
-            te_data = find_time_entry(time_entry)
-            if (te_data != None):
-                self.time_entries.append(te_data)
-                total_spent_hours += te_data.hours
+        if (hasattr(issue, 'time_entries')):
+            for time_entry in issue.time_entries:
+                te_data = find_time_entry(time_entry)
+                if (te_data != None):
+                    self.time_entries.append(te_data)
+                    total_spent_hours += te_data.hours
 
         #/* total_spent_hoursがサポートされない場合は、time_entriesの合計値とする（本来は、子チケットの時間も集計するようだが・・・） */
         if (hasattr(issue, 'total_spent_hours')):
@@ -265,6 +299,7 @@ class cIssueData:
         print("  Subject         : %s" % (self.subject))
         print("  Status          : %s" % (self.status))
         print("  Parent          : %s" % (self.parent))
+        print("  Children        : %s" % (self.children))
         print("  Priority        : %s" % (self.priority))
         print("  Author          : %s" % (self.author.name))
         print("  AssignedTo      : %s" % (self.assigned_to.name))
@@ -287,9 +322,26 @@ class cIssueData:
         for journal_data in self.journals:
             print("  Update[%s][%s]:%s" % (journal_data.id, journal_data.created_on, journal_data.user.name))
             for detail_data in journal_data.details:
-                print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, detail_data.old_val, detail_data.new_val))
+                if (detail_data.name == 'description'):
+                    print("    Detail[%s][%s] changed" % (detail_data.property, detail_data.name))
+                else:
+                    print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, detail_data.old_val, detail_data.new_val))
 
         return
+
+
+
+#/*****************************************************************************/
+#/* 孫attrの取得                                                              */
+#/*****************************************************************************/
+def getattr_ex(target, attr, sub_attr, default):
+    if (hasattr(target, attr)):
+        attr = getattr(target, attr)
+        ret_val = getattr(attr, sub_attr, default)
+    else:
+        ret_val = default
+
+    return ret_val
 
 
 
@@ -385,10 +437,10 @@ def get_user_data(redmine, user):
         for time_entry in time_entries:
             te = cTimeEntryData(time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user)
             te.project_name = time_entry.project.name
-            te.issue_id     = time_entry.issue.id
+            te.issue_id     = getattr_ex(time_entry, 'issue', 'id', 0)
             te.updated_on   = time_entry.updated_on
             te.activity     = time_entry.activity
-            print("TimeEntry[%s][%s]spent on : %s  %s hours by %s for #%s in %s, activity : %s" % (time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user.name, time_entry.issue.id, time_entry.project.name, time_entry.activity))
+            print("TimeEntry[%s][%s]spent on : %s  %s hours by %s for #%s in %s, activity : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.user.name, te.issue_id, te.project_name, te.activity))
             user_data.time_entries.append(te)
             g_time_entry_list.append(te)
 
@@ -402,6 +454,9 @@ def get_user_data(redmine, user):
 #/*****************************************************************************/
 def get_user_data_by_id(user_id):
     global g_user_list
+
+    if (user_id == 0):
+        return NONE_USER
 
     for user_data in g_user_list:
         if (user_data.id == user_id):
@@ -695,6 +750,7 @@ def main():
     global g_opt_url
     global g_opt_full_issues
     global g_opt_api_key
+    global g_issue_list
 
     check_command_line_option()
     start_time = log_start()
@@ -714,6 +770,7 @@ def main():
     else:
         pass
 
+    g_issue_list = sorted(g_issue_list, key=lambda issue: issue.id)
     output_datas()
     log_end(start_time)
     return
