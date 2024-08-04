@@ -28,6 +28,14 @@ ISSUE LIST ATTR : due_date
 ISSUE LIST ATTR : done_ratio
 ISSUE LIST ATTR : estimated_hours
 ISSUE LIST ATTR : total_spent_hours
+ISSUE LIST CF   : 1
+ISSUE LIST CF   : 2
+ISSUE LIST CF   : 3
+ISSUE LIST CF   : 4
+ISSUE LIST CF   : 5
+ISSUE LIST CF   : 6
+ISSUE LIST CF   : 7
+ISSUE LIST ATTR : journals
 
 
 

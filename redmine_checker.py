@@ -54,6 +54,10 @@ ATTR_NAME_DIC      = {
                      }
 
 
+
+re_1st_line         = re.compile(r"^([^\n]+)\n")
+
+
 #/*****************************************************************************/
 #/* 作業時間クラス                                                            */
 #/*****************************************************************************/
@@ -86,6 +90,14 @@ class cDetailData:
         if (self.property == 'attr') and (self.name == 'status'):
             return 1
 
+    def is_author_change(self):
+        if (self.property == 'attr') and (self.name == 'author'):
+            return 1
+
+    def is_assign_change(self):
+        if (self.property == 'attr') and (self.name == 'assigned_to'):
+            return 1
+
         return 0
 
 
@@ -100,6 +112,8 @@ class cJournalData:
         self.details          = []
         self.notes            = ""
         self.is_status_change = 0
+        self.is_author_change = 0
+        self.is_assign_change = 0
         return
 
 
@@ -217,6 +231,12 @@ class cIssueData:
         elif (attribute == 'children'):
             text = ",".join(map(str,self.children))
             return text
+        elif (attribute.isdigit()):
+            for cf in self.custom_fields:
+                if (cf.id == int(attribute)):
+                    return cf.get_disp_value()
+
+            return ""
         else:
             object = getattr(self, attribute)
             return object
@@ -254,9 +274,10 @@ class cIssueData:
         self.estimated_hours   = getattr(issue, 'estimated_hours', 0)
 
         #/* カスタムフィールドの取得 */
-        for cf in issue.custom_fields:
-            cf_data = cCustomFieledData(cf)
-            self.custom_fields.append(cf_data)
+        if (hasattr(issue, 'custom_fields')):
+            for cf in issue.custom_fields:
+                cf_data = cCustomFieledData(cf)
+                self.custom_fields.append(cf_data)
 
         #/* 更新情報の取得 */
         if (hasattr(issue, 'journals')):
@@ -267,6 +288,10 @@ class cIssueData:
                     journal_data.details.append(detail_data)
                     if (detail_data.is_status_change()):
                         journal_data.is_status_change = 1
+                    if (detail_data.is_author_change()):
+                        journal_data.is_author_change = 1
+                    if (detail_data.is_assign_change()):
+                        journal_data.is_assign_change = 1
 
                 journal_data.notes = getattr(journal, 'notes', "")
                 self.journals.append(journal_data)
@@ -322,10 +347,23 @@ class cIssueData:
         for journal_data in self.journals:
             print("  Update[%s][%s]:%s" % (journal_data.id, journal_data.created_on, journal_data.user.name))
             for detail_data in journal_data.details:
-                if (detail_data.name == 'description'):
-                    print("    Detail[%s][%s] changed" % (detail_data.property, detail_data.name))
+                if (type(detail_data.old_val) is str):
+                    if (result := re_1st_line.match(detail_data.old_val)):
+                        old_val = result.group(1).replace('\r', '') + '...'                                #/* 改行の含まれる値は無視して1行目だけを扱う */
+                    else:
+                        old_val = detail_data.old_val
                 else:
-                    print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, detail_data.old_val, detail_data.new_val))
+                    old_val = detail_data.old_val
+
+                if (type(detail_data.new_val) is str):
+                    if (result := re_1st_line.match(detail_data.new_val)):
+                        new_val = result.group(1).replace('\r', '') + '...'                                 #/* 改行の含まれる値は無視して1行目だけを扱う */
+                    else:
+                        new_val = detail_data.new_val
+                else:
+                    new_val = detail_data.new_val
+
+                print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
 
         return
 
@@ -384,6 +422,20 @@ def get_custom_fieled_format(id):
 
     if (cf_type != None):
         return cf_type.format
+
+    return ""
+
+
+#/*****************************************************************************/
+#/* カスタムフィールドの名称取得                                              */
+#/*****************************************************************************/
+def get_custom_fieled_name(id):
+    global g_cf_type_list
+
+    cf_type = get_custom_fieled_type(id)
+
+    if (cf_type != None):
+        return cf_type.name
 
     return ""
 
@@ -484,7 +536,8 @@ def read_setting_file(file_path):
     re_opt_api_key    = re.compile(r"API KEY\s+: ([^\n]+)")
     re_opt_out_file   = re.compile(r"OUT FILE NAME\s+: ([^\n]+)")
     re_opt_tgt_prj    = re.compile(r"TARGET PROJECT\s+: ([^\n]+)")
-    re_opt_list_att   = re.compile(r"ISSUE LIST ATTR\s+: ([^\n]+)")
+    re_opt_list_attr  = re.compile(r"ISSUE LIST ATTR\s+: ([^\n]+)")
+    re_opt_list_cf    = re.compile(r"ISSUE LIST CF\s+: ([0-9]+)")
     re_opt_sub_prj    = re.compile(r"INCLUDE SUB PRJ\s+: ([^\n]+)")
 
     for line in lines:
@@ -497,7 +550,9 @@ def read_setting_file(file_path):
             g_opt_target_projects.append(result.group(1))
         elif (result := re_opt_out_file.match(line)):
             g_opt_out_file = result.group(1)
-        elif (result := re_opt_list_att.match(line)):
+        elif (result := re_opt_list_attr.match(line)):
+            g_opt_list_attrs.append(result.group(1))
+        elif (result := re_opt_list_cf.match(line)):
             g_opt_list_attrs.append(result.group(1))
         elif (result := re_opt_sub_prj.match(line)):
             g_opt_include_sub_prj = int(result.group(1))
@@ -664,7 +719,10 @@ def output_issue_list_format_line(ws):
     row = 1
     col = 1
     for item in g_opt_list_attrs:
-        ws.cell(row, col).value = ATTR_NAME_DIC[item]
+        if (item in ATTR_NAME_DIC):
+            ws.cell(row, col).value = ATTR_NAME_DIC[item]
+        else:
+            ws.cell(row, col).value = get_custom_fieled_name(int(item))
         col += 1
 
     return
@@ -677,11 +735,24 @@ def output_issue_list_line(ws, row, issue_data):
     global g_opt_list_attrs
 
     col = 1
+    offset = 0
     for item in g_opt_list_attrs:
-        ws.cell(row, col).value = issue_data.get_disp_attr(item)
+        if (item != 'journals'):
+            ws.cell(row, col).value = issue_data.get_disp_attr(item)
+        else:
+            for journal in issue_data.journals:
+                ws.cell(row + offset, col    ).value = journal.id
+                ws.cell(row + offset, col + 1).value = journal.created_on
+                ws.cell(row + offset, col + 2).value = journal.user.name
+                offset += 1
+            col += 2
+
         col += 1
 
-    return
+    if (offset > 0):
+        offset -= 1          #/* 1行目のjournalはカウントしないため、引いておく */
+
+    return offset
 
 
 #/*****************************************************************************/
@@ -694,8 +765,8 @@ def output_all_issues_list(ws):
     output_issue_list_format_line(ws)
     row = 2
     for issue_data in g_issue_list:
-        output_issue_list_line(ws, row, issue_data)
-        row += 1
+        offset = output_issue_list_line(ws, row, issue_data)
+        row += (1 + offset)
 
     return
 
