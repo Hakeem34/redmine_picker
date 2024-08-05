@@ -82,8 +82,8 @@ class cDetailData:
     def __init__(self, detail):
         self.property   = detail.get('property')
         self.name       = detail.get('name')
-        self.old_val    = detail.get('old_value')
-        self.new_val    = detail.get('new_value')
+        self.old_val    = enc_dec_str(detail.get('old_value'))
+        self.new_val    = enc_dec_str(detail.get('new_value'))
         return
 
     def is_status_change(self):
@@ -347,26 +347,32 @@ class cIssueData:
         for journal_data in self.journals:
             print("  Update[%s][%s]:%s" % (journal_data.id, journal_data.created_on, journal_data.user.name))
             for detail_data in journal_data.details:
-                if (type(detail_data.old_val) is str):
-                    if (result := re_1st_line.match(detail_data.old_val)):
-                        old_val = result.group(1).replace('\r', '') + '...'                                #/* 改行の含まれる値は無視して1行目だけを扱う */
-                    else:
-                        old_val = detail_data.old_val
-                else:
-                    old_val = detail_data.old_val
-
-                if (type(detail_data.new_val) is str):
-                    if (result := re_1st_line.match(detail_data.new_val)):
-                        new_val = result.group(1).replace('\r', '') + '...'                                 #/* 改行の含まれる値は無視して1行目だけを扱う */
-                    else:
-                        new_val = detail_data.new_val
-                else:
-                    new_val = detail_data.new_val
-
+                old_val = omit_multi_line_str(detail_data.old_val)
+                new_val = omit_multi_line_str(detail_data.new_val)
                 print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
 
         return
 
+
+#/*****************************************************************************/
+#/* S-JISでエラーとなる文字の排除                                             */
+#/*****************************************************************************/
+def enc_dec_str(value):
+    if (type(value) is str):
+        value = value.encode('cp932', 'replace').decode('cp932', 'replace')
+
+    return value
+
+
+#/*****************************************************************************/
+#/* 複数行のテキストを省略して1行テキストに変換                               */
+#/*****************************************************************************/
+def omit_multi_line_str(value):
+    if (type(value) is str):
+        if (result := re_1st_line.match(value)):
+            value = result.group(1).replace('\r', '') + '...'                                #/* 改行の含まれる値は無視して1行目だけを扱う */
+
+    return value
 
 
 #/*****************************************************************************/
