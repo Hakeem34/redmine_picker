@@ -22,6 +22,7 @@ g_opt_list_cfs        = []
 g_opt_out_file        = 'redmine_result_%ymd.xlsx'
 g_opt_target_projects = []
 g_opt_include_sub_prj = 1
+g_opt_journal_filters = []
 
 g_target_project_ids = []
 g_user_list          = []
@@ -86,19 +87,20 @@ class cDetailData:
         self.new_val    = enc_dec_str(detail.get('new_value'))
         return
 
-    def is_status_change(self):
-        if (self.property == 'attr') and (self.name == 'status'):
-            return 1
+    def filter_check(self):
+        global g_opt_journal_filters
 
-    def is_author_change(self):
-        if (self.property == 'attr') and (self.name == 'author'):
-            return 1
-
-    def is_assign_change(self):
-        if (self.property == 'attr') and (self.name == 'assigned_to'):
-            return 1
+        if (self.property == 'attr'):
+            for filter_attr in g_opt_journal_filters:
+                if (self.name == filter_attr):
+#                   print("filter attr : %s" % (filter_attr))
+                    return 1
+                else:
+#                   print("filter no hit! : %s : %s" % (self.name, filter_attr))
+                    pass
 
         return 0
+
 
 
 #/*****************************************************************************/
@@ -111,9 +113,7 @@ class cJournalData:
         self.user             = user_data
         self.details          = []
         self.notes            = ""
-        self.is_status_change = 0
-        self.is_author_change = 0
-        self.is_assign_change = 0
+        self.filter           = 0
         return
 
 
@@ -246,9 +246,9 @@ class cIssueData:
     #/* python-redmineからチケット情報の読み出し                                  */
     #/*****************************************************************************/
     def read_issue_data(self, issue):
-        self.project = issue.project.name
+        global g_opt_list_attrs
 
-        
+        self.project           = issue.project.name
         self.parent            = getattr_ex(issue, 'parent', 'id', 0)
 
         children               = getattr(issue, 'children', [])
@@ -278,6 +278,10 @@ class cIssueData:
             for cf in issue.custom_fields:
                 cf_data = cCustomFieledData(cf)
                 self.custom_fields.append(cf_data)
+                if (str(cf_data.id) in g_opt_list_attrs):
+                    pass
+                else:
+                    print("CF[%d] is not in g_opt_list_attrs" % (cf_data.id))
 
         #/* 更新情報の取得 */
         if (hasattr(issue, 'journals')):
@@ -285,16 +289,12 @@ class cIssueData:
                 journal_data = cJournalData(journal.id, journal.created_on, get_user_data_by_id(journal.user.id))
                 for detail in journal.details:
                     detail_data = cDetailData(detail)
-                    journal_data.details.append(detail_data)
-                    if (detail_data.is_status_change()):
-                        journal_data.is_status_change = 1
-                    if (detail_data.is_author_change()):
-                        journal_data.is_author_change = 1
-                    if (detail_data.is_assign_change()):
-                        journal_data.is_assign_change = 1
+                    if (detail_data.filter_check()):
+                        journal_data.filter = 1
+                        journal_data.details.append(detail_data)
 
-                journal_data.notes = getattr(journal, 'notes', "")
-                self.journals.append(journal_data)
+                journal_data.notes = omit_multi_line_str(getattr(journal, 'notes', ""))
+                self.append_journal_data(journal_data)
 
         #/* 作業時間情報の取得 */
         total_spent_hours = 0
@@ -310,6 +310,16 @@ class cIssueData:
             self.total_spent_hours = issue.total_spent_hours
         else:
             self.total_spent_hours = total_spent_hours
+
+        return
+
+
+    #/*****************************************************************************/
+    #/* 更新情報の登録                                                            */
+    #/*****************************************************************************/
+    def append_journal_data(self, journal_data):
+        if (journal_data.filter > 0) or (journal_data.notes != ""):
+            self.journals.append(journal_data)
 
         return
 
@@ -525,7 +535,7 @@ def get_user_data_by_id(user_id):
 
 
 #/*****************************************************************************/
-#/* コマンドライン引数処理                                                    */
+#/* 設定ファイル読み込み処理                                                  */
 #/*****************************************************************************/
 def read_setting_file(file_path):
     global g_opt_url
@@ -534,6 +544,7 @@ def read_setting_file(file_path):
     global g_opt_out_file
     global g_opt_list_attrs
     global g_opt_include_sub_prj
+    global g_opt_journal_filters
 
     f = open(file_path, 'r')
     lines = f.readlines()
@@ -545,7 +556,9 @@ def read_setting_file(file_path):
     re_opt_list_attr  = re.compile(r"ISSUE LIST ATTR\s+: ([^\n]+)")
     re_opt_list_cf    = re.compile(r"ISSUE LIST CF\s+: ([0-9]+)")
     re_opt_sub_prj    = re.compile(r"INCLUDE SUB PRJ\s+: ([^\n]+)")
+    re_opt_filter     = re.compile(r"JOURNAL FILTER\s+: ([^\n]+)")
 
+    journal_append = 0
     for line in lines:
 #       print ("line:%s" % line)
         if (result := re_opt_url.match(line)):
@@ -557,11 +570,19 @@ def read_setting_file(file_path):
         elif (result := re_opt_out_file.match(line)):
             g_opt_out_file = result.group(1)
         elif (result := re_opt_list_attr.match(line)):
-            g_opt_list_attrs.append(result.group(1))
+            if (result.group(1) == 'journals'):
+                journal_append = 1                        #/* 表示の都合上、更新情報の出力は一番末尾（右側）とする */
+            else:
+                g_opt_list_attrs.append(result.group(1))
         elif (result := re_opt_list_cf.match(line)):
             g_opt_list_attrs.append(result.group(1))
         elif (result := re_opt_sub_prj.match(line)):
             g_opt_include_sub_prj = int(result.group(1))
+        elif (result := re_opt_filter.match(line)):
+            g_opt_journal_filters.append(result.group(1))
+
+    if (journal_append > 0):
+        g_opt_list_attrs.append('journals')
 
     f.close()
     return
@@ -750,8 +771,18 @@ def output_issue_list_line(ws, row, issue_data):
                 ws.cell(row + offset, col    ).value = journal.id
                 ws.cell(row + offset, col + 1).value = journal.created_on
                 ws.cell(row + offset, col + 2).value = journal.user.name
-                offset += 1
-            col += 2
+                ws.cell(row + offset, col + 3).value = journal.notes
+                for detail in journal.details:
+                    ws.cell(row + offset, col + 4).value = detail.property
+                    ws.cell(row + offset, col + 5).value = detail.name
+                    ws.cell(row + offset, col + 6).value = detail.old_val
+                    ws.cell(row + offset, col + 7).value = detail.new_val
+                    offset += 1
+
+                if (len(journal.details) == 0):
+                    offset += 1                       #/* 詳細データがない場合のみ、次の行に進む */
+
+            col += 6
 
         col += 1
 

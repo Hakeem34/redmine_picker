@@ -6,11 +6,11 @@ TARGET PROJECT  : TestProject
 TARGET PROJECT  : Redmineスクリプト
 INCLUDE SUB PRJ : 1
 
-TARGET JOURNAL  : notes
-TARGET JOURNAL  : status_change
-
 OUT FILE NAME   : redmine_result_%ymd_%hms.xlsx
 
+#/******************************/
+#/* チケット一覧に出力する情報 */
+#/******************************/
 ISSUE LIST ATTR : id
 ISSUE LIST ATTR : project
 ISSUE LIST ATTR : parent
@@ -38,5 +38,12 @@ ISSUE LIST CF   : 7
 ISSUE LIST ATTR : journals
 
 
+#/******************************/
+#/* 更新情報のフィルタ         */
+#/******************************/
+JOURNAL FILTER  : assigned_to_id
+JOURNAL FILTER  : status_id
+JOURNAL FILTER  : done_ratio
+JOURNAL FILTER  : due_date
 
 
