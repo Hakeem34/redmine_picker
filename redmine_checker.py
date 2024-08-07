@@ -51,7 +51,7 @@ ATTR_NAME_DIC      = {
                          'done_ratio'        : '進捗率',
                          'estimated_hours'   : '予定工数',
                          'total_spent_hours' : '作業時間',
-                         'journals'          : '更新データ',
+                         'journals'          : '更新ID',
                      }
 
 
@@ -87,20 +87,60 @@ class cDetailData:
         self.new_val    = enc_dec_str(detail.get('new_value'))
         return
 
+
+    #/*****************************************************************************/
+    #/* データ保存対象フィルタのチェック                                          */
+    #/*****************************************************************************/
     def filter_check(self):
         global g_opt_journal_filters
 
         if (self.property == 'attr'):
             for filter_attr in g_opt_journal_filters:
                 if (self.name == filter_attr):
-#                   print("filter attr : %s" % (filter_attr))
                     return 1
-                else:
-#                   print("filter no hit! : %s : %s" % (self.name, filter_attr))
-                    pass
+        elif (self.property == 'cf'):
+            for filter_attr in g_opt_journal_filters:
+                if (self.name == filter_attr):
+                    return 1
 
         return 0
 
+
+    #/*****************************************************************************/
+    #/* 表示データ名取得                                                          */
+    #/*****************************************************************************/
+    def get_disp_name(self):
+        name = self.name
+
+        #/* カスタムフィールドの場合、nameにはカスタムフィールドのIDがstrで入っているので、カスタムフィールドの名前に変換する */
+        if (self.property == 'cf'):
+            name = get_custom_fieled_name(int(name))
+
+        return name
+
+
+    #/*****************************************************************************/
+    #/* 表示データ変換                                                            */
+    #/*****************************************************************************/
+    def get_disp_value(self, value):
+        if (value == None) or (value == ""):
+            return "-"
+
+        if (self.property == 'attr'):
+            if (self.name == 'assigned_to_id'):
+                value = get_user_data_by_id(int(value)).name
+            elif (self.name == 'status_id'):
+                value = get_issue_status_name(int(value))
+        elif (self.property == 'cf'):
+            value = get_custom_fieled_disp_value(int(self.name), value)
+
+        return value
+
+    def get_disp_old_value(self):
+        return self.get_disp_value(self.old_val)
+
+    def get_disp_new_value(self):
+        return self.get_disp_value(self.new_val)
 
 
 #/*****************************************************************************/
@@ -471,6 +511,31 @@ def get_custom_fieled_dictionary(id):
 
 
 #/*****************************************************************************/
+#/* カスタムフィールドの表示値の取得                                          */
+#/*****************************************************************************/
+def get_custom_fieled_disp_value(id, value):
+    if (get_custom_fieled_format(id) == "user"):
+        if (value == None):
+            return NONE_USER.name
+
+        if (value == ""):
+            return NONE_USER.name
+
+        return get_user_data_by_id(int(value)).name
+    elif (get_custom_fieled_format(id) == "enumeration"):
+        if (value == None):
+            return ""
+
+        if (value == ""):
+            return ""
+
+        dic = get_custom_fieled_dictionary(id)
+        return dic[str(value)]
+
+    return value
+
+
+#/*****************************************************************************/
 #/* 作業時間情報の検索                                                        */
 #/*****************************************************************************/
 def find_time_entry(te):
@@ -730,11 +795,22 @@ def check_issue_status(redmine):
 
     print("--------------------------------- Check Issue Status Types ---------------------------------")
     for status in statuses:
-#       print(status)
-#       print(dir(status))
         status_type = cIssueStatusType(status)
         print("[%s][%s] is_closed : %d" % (status_type.id, status_type.name, status_type.is_closed))
         g_status_type_list.append(status_type)
+
+
+#/*****************************************************************************/
+#/* チケットステータス名の取得                                                */
+#/*****************************************************************************/
+def get_issue_status_name(status_id):
+    global g_status_type_list
+
+    for status in g_status_type_list:
+        if (status_id == status.id):
+            return status.name
+
+    return "-"
 
 
 #/*****************************************************************************/
@@ -748,6 +824,14 @@ def output_issue_list_format_line(ws):
     for item in g_opt_list_attrs:
         if (item in ATTR_NAME_DIC):
             ws.cell(row, col).value = ATTR_NAME_DIC[item]
+            if (item == 'journals'):
+                ws.cell(row, col + 1).value = '更新日'
+                ws.cell(row, col + 2).value = '更新者'
+                ws.cell(row, col + 3).value = 'コメント'
+                ws.cell(row, col + 4).value = '詳細'
+                ws.cell(row, col + 5).value = '更新値'
+                ws.cell(row, col + 6).value = '更新前'
+                ws.cell(row, col + 7).value = '更新後'
         else:
             ws.cell(row, col).value = get_custom_fieled_name(int(item))
         col += 1
@@ -774,9 +858,9 @@ def output_issue_list_line(ws, row, issue_data):
                 ws.cell(row + offset, col + 3).value = journal.notes
                 for detail in journal.details:
                     ws.cell(row + offset, col + 4).value = detail.property
-                    ws.cell(row + offset, col + 5).value = detail.name
-                    ws.cell(row + offset, col + 6).value = detail.old_val
-                    ws.cell(row + offset, col + 7).value = detail.new_val
+                    ws.cell(row + offset, col + 5).value = detail.get_disp_name()
+                    ws.cell(row + offset, col + 6).value = detail.get_disp_old_value()
+                    ws.cell(row + offset, col + 7).value = detail.get_disp_new_value()
                     offset += 1
 
                 if (len(journal.details) == 0):

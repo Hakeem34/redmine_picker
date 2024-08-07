@@ -45,5 +45,5 @@ JOURNAL FILTER  : assigned_to_id
 JOURNAL FILTER  : status_id
 JOURNAL FILTER  : done_ratio
 JOURNAL FILTER  : due_date
-
+JOURNAL FILTER  : 3
 
