@@ -197,7 +197,17 @@ class cCustomFieledData:
                 return ""
 
             dic = get_custom_fieled_dictionary(self.id)
-            return dic[str(self.value)]
+            multiple = get_custom_fieled_multiple(self.id)
+            if (multiple):
+                ret_val = '\n'.join(self.value)
+                return ret_val
+            else:
+                return dic[str(self.value)]
+
+        multiple = get_custom_fieled_multiple(self.id)
+        if (multiple):
+            ret_val = '\n'.join(self.value)
+            return ret_val
 
         return self.value
 
@@ -213,6 +223,7 @@ class cCustomFieledType:
         self.type       = cf.customized_type
         self.format     = cf.field_format
         self.dictionary = {}
+        self.multiple   = getattr(cf, 'multiple', 0)
 
         if (self.format == 'enumeration'):
             for value_label in cf.possible_values:
@@ -288,6 +299,10 @@ class cIssueData:
     def read_issue_data(self, issue):
         global g_opt_list_attrs
 
+#       print("issue      : %s" % dir(issue))
+#       print("changesets : %s" % dir(issue.changesets))
+#       print("project    : %s" % dir(issue.project))
+#       print("versions   : %s" % dir(issue.project.versions))
         self.project           = issue.project.name
         self.parent            = getattr_ex(issue, 'parent', 'id', 0)
 
@@ -508,6 +523,20 @@ def get_custom_fieled_dictionary(id):
         return cf_type.dictionary
 
     return {}
+
+
+#/*****************************************************************************/
+#/* カスタムフィールドが複数選択可能かどうか                                  */
+#/*****************************************************************************/
+def get_custom_fieled_multiple(id):
+    global g_cf_type_list
+
+    cf_type = get_custom_fieled_type(id)
+
+    if (cf_type != None):
+        return cf_type.multiple
+
+    return 0
 
 
 #/*****************************************************************************/
