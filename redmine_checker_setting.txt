@@ -6,7 +6,9 @@ TARGET PROJECT  : TestProject
 TARGET PROJECT  : Redmineスクリプト
 INCLUDE SUB PRJ : 1
 
-OUT FILE NAME   : redmine_result_%ymd_%hms.xlsx
+IN  FILE NAME   : redmine_result.xlsx
+OUT FILE NAME   : redmine_result_%ymd.xlsx
+
 
 #/******************************/
 #/* チケット一覧に出力する情報 */
@@ -28,6 +30,7 @@ ISSUE LIST ATTR : due_date
 ISSUE LIST ATTR : done_ratio
 ISSUE LIST ATTR : estimated_hours
 ISSUE LIST ATTR : total_spent_hours
+ISSUE LIST ATTR : fixed_version
 ISSUE LIST CF   : 1
 ISSUE LIST CF   : 2
 ISSUE LIST CF   : 3
@@ -39,6 +42,7 @@ ISSUE LIST CF   : 8
 ISSUE LIST CF   : 9
 ISSUE LIST CF   : 10
 ISSUE LIST CF   : 11
+ISSUE LIST CF   : 12
 ISSUE LIST ATTR : journals
 
 
