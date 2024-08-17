@@ -18,12 +18,13 @@ g_opt_api_key         = ""
 g_opt_full_issues     = 0
 g_opt_url             = 'http://localhost:3000/'
 g_opt_list_attrs      = ['id']
-g_opt_list_cfs        = []
 g_opt_out_file        = 'redmine_result_%ymd.xlsx'
-g_opt_in_file         = 'redmine_result.xlsx'
+g_opt_in_file         = ''
 g_opt_target_projects = []
 g_opt_include_sub_prj = 1
 g_opt_journal_filters = []
+g_opt_redmine_version = None
+g_opt_setting_file    = ""
 
 g_target_project_list = []
 g_user_list           = []
@@ -32,7 +33,13 @@ g_status_type_list    = []
 g_issue_list          = []
 g_time_entry_list     = []
 g_version_list        = []
+g_project_id_dic      = {}
+g_tracker_id_dic      = {}
+g_enum_priority_dic   = {}
+g_enum_activity_dic   = {}
+g_enum_category_dic   = {}
 g_filter_limit        = 20
+
 
 
 ATTR_NAME_DIC      = {
@@ -60,8 +67,41 @@ ATTR_NAME_DIC      = {
 
 
 re_1st_line         = re.compile(r"^([^\n]+)\n")
-re_user_disp        = re.compile(r"^\[([0-9]+)\].+")
+re_key_val_disp     = re.compile(r"^\[([0-9]+)\].+")
 re_cf_data          = re.compile(r"^cf_([0-9]+)")
+
+
+#/*****************************************************************************/
+#/* 作成・更新タイムスタンプ保持                                              */
+#/*****************************************************************************/
+class cLatestTimeStamp:
+    def __init__(self):
+        self.created_on = ''
+        self.updated_on = ''
+        return
+
+    def created_timestamp(self, ts):
+        if (self.created_on == ''):
+#           print("latest created! : %s < %s" % (self.created_on, ts))
+            self.created_on = ts
+        elif (self.created_on < ts):
+#           print("latest created! : %s < %s" % (self.created_on, ts))
+            self.created_on = ts
+        return
+
+    def updated_timestamp(self, ts):
+        if (self.updated_on == ''):
+#           print("latest updated! : %s < %s" % (self.updated_on, ts))
+            self.updated_on = ts
+        elif (self.updated_on < ts):
+#           print("latest updated! : %s < %s" % (self.updated_on, ts))
+            self.updated_on = ts
+        return
+
+g_issues_ts       = cLatestTimeStamp()
+g_time_entries_ts = cLatestTimeStamp()
+
+
 
 
 #/*****************************************************************************/
@@ -90,16 +130,27 @@ class cProjectData:
 #/* 作業時間クラス                                                            */
 #/*****************************************************************************/
 class cTimeEntryData:
-    def __init__(self, id, created_on, spent_on, hours, user_data):
+    def __init__(self, id):
         self.id           = id
-        self.created_on   = created_on
-        self.user         = user_data
-        self.spent_on     = spent_on
-        self.hours        = hours
+        self.created_on   = ""
+        self.user         = None
+        self.spent_on     = ""
+        self.hours        = 0
         self.updated_on   = ""
         self.activity     = ""
         self.project_name = ""
         self.issue_id     = ""
+        return
+
+    def set_data_by_time_entry(self, te):
+        self.created_on   = te.created_on
+        self.user         = get_user_data_by_id(te.user.id)
+        self.spent_on     = te.spent_on
+        self.hours        = te.hours
+        self.updated_on   = te.updated_on
+        self.activity     = str(te.activity)
+        self.project_name = te.project.name
+        self.issue_id     = getattr_ex(te, 'issue', 'id', 0)
         return
 
 
@@ -107,11 +158,35 @@ class cTimeEntryData:
 #/* チケット更新の詳細データクラス                                            */
 #/*****************************************************************************/
 class cDetailData:
-    def __init__(self, detail):
+    def __init__(self):
+        self.property   = ""
+        self.name       = ""
+        self.old_val    = ""
+        self.new_val    = ""
+        self.filter     = 0
+        return
+
+    def set_detail(self, detail):
+#       print("set detail  prop:%s, nmme:%s, old:%s, new:%s" % (detail.get('property'), detail.get('name'), enc_dec_str(detail.get('old_value')), enc_dec_str(detail.get('new_value'))))
         self.property   = detail.get('property')
         self.name       = detail.get('name')
-        self.old_val    = enc_dec_str(detail.get('old_value'))
-        self.new_val    = enc_dec_str(detail.get('new_value'))
+        self.old_val    = omit_multi_line_str(enc_dec_str(detail.get('old_value')))
+        self.new_val    = omit_multi_line_str(enc_dec_str(detail.get('new_value')))
+        return
+
+    def set_str_data(self, prop, name, old, new):
+        self.property   = prop
+        if (prop == 'attr'):
+            self.name       = name
+            self.old_val    = self.set_attr_from_disp_value(old)
+            self.new_val    = self.set_attr_from_disp_value(new)
+        elif (prop == 'cf'):
+            self.name       = str(get_key_from_kv_str(name))
+            self.old_val    = self.set_cf_from_disp_value(old)
+            self.new_val    = self.set_cf_from_disp_value(new)
+
+#       print("set_str_data prop:%s, name:%s, old:%s, new:%s" % (self.property, self.name, self.old_val, self.new_val))
+        self.filter     = 1                       #/* Excelから読み込んだデータは無条件にフィルターをパスする */
         return
 
 
@@ -123,11 +198,14 @@ class cDetailData:
 
         if (self.property == 'attr'):
             for filter_attr in g_opt_journal_filters:
+#               print("attr filter [%s] [%s]" % (self.name, filter_attr))
                 if (self.name == filter_attr):
+                    self.filter = 1
                     return 1
         elif (self.property == 'cf'):
             for filter_attr in g_opt_journal_filters:
                 if (self.name == filter_attr):
+                    self.filter = 1
                     return 1
 
         return 0
@@ -141,25 +219,109 @@ class cDetailData:
 
         #/* カスタムフィールドの場合、nameにはカスタムフィールドのIDがstrで入っているので、カスタムフィールドの名前に変換する */
         if (self.property == 'cf'):
-            name = get_custom_fieled_name(int(name))
+            name = "[%s]%s" % (name, get_custom_fieled_name(int(name)))
 
         return name
 
+    #/*****************************************************************************/
+    #/* 表示データ変換(Attribute)                                                 */
+    #/*****************************************************************************/
+    def get_disp_value_attr(self, value):
+        if (self.name == 'assigned_to_id'):
+            user_data = get_user_data_by_id(int(value))
+            value = get_key_value_str(user_data.id, user_data.name)
+        elif (self.name == 'status_id'):
+            value = get_key_value_str(int(value), get_issue_status_name(int(value)))
+        elif (self.name == 'tracker_id'):
+            value = get_key_value_str(int(value), g_tracker_id_dic[int(value)])
+        elif (self.name == 'priority_id'):
+            value = get_key_value_str(int(value), g_enum_priority_dic[int(value)])
+        elif (self.name == 'fixed_version_id'):
+            value = get_version_str(int(value))
+        elif (self.name == 'done_ratio') or (self.name == 'parent'):
+            value = int(value)
+        elif (self.name == 'total_spent_hours'):
+            value = float(value)
+
+        return value
+
+    #/*****************************************************************************/
+    #/* 表示データから実データへの変換(Attribute)                                 */
+    #/*****************************************************************************/
+    def set_attr_from_disp_value(self, text):
+        value = text
+#       print("set_attr_from_disp_value  text : %s" % text)
+        if (text == '-'):
+            value = None
+        elif (self.name == 'assigned_to_id'):
+            value = str(get_key_from_kv_str(text))
+        elif (self.name == 'status_id'):
+            value = str(get_key_from_kv_str(text))
+        elif (self.name == 'tracker_id'):
+            value = str(get_key_from_kv_str(text))
+        elif (self.name == 'priority_id'):
+            value = str(get_key_from_kv_str(text))
+        elif (self.name == 'fixed_version_id'):
+            value = str(get_key_from_kv_str(text))
+        elif (self.name == 'done_ratio') or (self.name == 'parent'):
+            value = int(text)
+        elif (self.name == 'total_spent_hours'):
+            value = float(text)
+
+        return value
+
+    #/*****************************************************************************/
+    #/* 表示データ変換(Custom Fieled)                                            */
+    #/*****************************************************************************/
+    def get_disp_value_cf(self, value):
+        id         = int(self.name)
+        multiple   = get_custom_fieled_multiple(id)
+        format     = get_custom_fieled_format(id)
+        dictionary = get_custom_fieled_dictionary(id)
+
+        if (format == 'user'):
+            user_data = get_user_data_by_id(int(value))
+            value = get_key_value_str(user_data.id, user_data.name)
+        elif (format == 'enumeration'):
+            value = get_key_value_str(int(value), dictionary[value])
+        elif (format == 'version'):
+            value = get_version_str(int(value))
+
+        return value
+
+    #/*****************************************************************************/
+    #/* 表示データから実データへの変換(Custom Fieled)                             */
+    #/*****************************************************************************/
+    def set_cf_from_disp_value(self, text):
+        value = text
+        id         = int(self.name)
+        format     = get_custom_fieled_format(id)
+        if (format == 'user'):
+            if (value == None) or (value == "") or (value == "-"):
+                return None
+
+            value = str(get_key_from_kv_str(text))
+        elif (format == 'enumeration'):
+            value = str(get_key_from_kv_str(text))
+        elif (format == 'version'):
+            value = str(get_key_from_kv_str(text))
+
+        return value
 
     #/*****************************************************************************/
     #/* 表示データ変換                                                            */
     #/*****************************************************************************/
     def get_disp_value(self, value):
+        global g_tracker_id_dic
+        global g_enum_priority_dic
+
         if (value == None) or (value == ""):
             return "-"
 
         if (self.property == 'attr'):
-            if (self.name == 'assigned_to_id'):
-                value = get_user_data_by_id(int(value)).name
-            elif (self.name == 'status_id'):
-                value = get_issue_status_name(int(value))
+            value = self.get_disp_value_attr(value)
         elif (self.property == 'cf'):
-            value = get_custom_fieled_disp_value(int(self.name), value)
+            value = self.get_disp_value_cf(value)
 
         return value
 
@@ -182,6 +344,15 @@ class cJournalData:
         self.notes            = ""
         self.filter           = 0
         return
+
+    def is_filter_pass(self):
+        global g_opt_journal_filters
+
+        if ('notes' in g_opt_journal_filters):
+            if (self.notes != ""):
+                return 1
+
+        return self.filter
 
 
 #/*****************************************************************************/
@@ -223,26 +394,27 @@ class cCustomFieledData:
         elif (format == 'enumeration'):
             #/* enumerationのIDの場合は、ID＋テキストの形式で保持する。複数可の場合はリスト化する */
             if (multiple):
-                print("multiple enum : %s" % cf_value)
+#               print("multiple enum : %s" % cf_value)
                 self.value = []
                 for value in cf_value:
                     str_value = dictionary[value]
                     self.value.append(get_key_value_str(int(value), str_value))
             else:
-                if (cf_value == None) or (cf_value == ''):
+                if (cf_value == None) or (cf_value == '') or (cf_value == '0'):
                     self.value = "[0]-"
                 else:
                     str_value = dictionary[cf_value]
                     self.value = get_key_value_str(int(cf_value), str_value)
         elif (format == 'version'):
-            #/* versionのIDの場合は、テキストの形式で保持する。複数可の場合はリスト化する */
+            #/* versionのIDの場合は、ID＋テキストの形式で保持する。複数可の場合はリスト化する */
             if (multiple):
+#               print("multiple version : %s" % cf_value)
                 self.value = []
                 for value in cf_value:
                     self.value.append(get_version_str(int(value)))
             else:
-                if (cf_value == None) or (cf_value == ''):
-                    self.value = "-"
+                if (cf_value == None) or (cf_value == '') or (cf_value == '-'):
+                    self.value = "[0]-"
                 else:
                     self.value = get_version_str(int(cf_value))
         else:
@@ -263,7 +435,7 @@ class cCustomFieledData:
                 name_list = []
                 for value in self.value:
                     name_list.append(get_key_value_str(value.id, value.name))
-                return "\n".join(name_list)             #/* 表示名だと重複の可能性があるため、[id]nameのフォーマットで出力する */
+                return "\n".join(name_list)                                          #/* 表示名だと重複の可能性があるため、[id]nameのフォーマットで出力する */
             else:
                 return get_key_value_str(self.value.id, self.value.name)             #/* 表示名だと重複の可能性があるため、[id]nameのフォーマットで出力する */
 
@@ -343,7 +515,7 @@ class cIssueData:
             object = getattr(self, attribute)
             return get_key_value_str(object.id, object.name)             #/* 表示名だと重複の可能性があるため、[id]nameのフォーマットで出力する */
         elif (attribute == 'children'):
-            text = ",".join(map(str, self.children))
+            text = "\n".join(map(str, self.children))
             return text
         elif (attribute.isdigit()):
             for cf in self.custom_fields:
@@ -360,16 +532,14 @@ class cIssueData:
     #/* python-redmineからチケット情報の読み出し                                  */
     #/*****************************************************************************/
     def read_issue_data(self, issue):
+        global g_issues_ts
         global g_opt_list_attrs
 
-#       print("issue      : %s" % dir(issue))
-#       print("changesets : %s" % dir(issue.changesets))
-#       print("project    : %s" % dir(issue.project))
-#       print("versions   : %s" % dir(issue.project.versions))
         self.project           = issue.project.name
         self.parent            = getattr_ex(issue, 'parent', 'id', 0)
 
         children               = getattr(issue, 'children', [])
+        self.children          = []
         for child in children:
             self.children.append(child.id)
 
@@ -383,7 +553,10 @@ class cIssueData:
         self.assigned_to       = get_user_data_by_id(assigned_user.id)
 
         self.created_on        = getattr(issue, 'created_on', "-")
+        g_issues_ts.created_timestamp(self.created_on)
+
         self.updated_on        = getattr(issue, 'updated_on', "-")
+        g_issues_ts.updated_timestamp(self.updated_on)
 
         self.closed_on         = getattr(issue, 'closed_on', "-")
         self.start_date        = getattr(issue, 'start_date', "-")
@@ -392,14 +565,15 @@ class cIssueData:
         self.estimated_hours   = getattr(issue, 'estimated_hours', 0)
         fixed_version          = getattr(issue, 'fixed_version', "-")
         if (fixed_version == "-"):
-            self.fixed_version = fixed_version
+            self.fixed_version = "[0]-"
         else:
-            self.fixed_version = fixed_version.name
+            self.fixed_version = get_version_str(fixed_version.id)
             version_data = get_version_info(fixed_version)
-            version_data.issues.append(self)                     #/* バージョン情報に自分（チケット）の情報を紐づける */
+            append_wo_duplicate(version_data.issues, self)               #/* バージョン情報に自分（チケット）の情報を紐づける */
 
 
         #/* カスタムフィールドの取得 */
+        self.custom_fields = []
         if (hasattr(issue, 'custom_fields')):
             for cf in issue.custom_fields:
                 cf_data = cCustomFieledData(cf.id, cf.name, cf.value)
@@ -410,23 +584,28 @@ class cIssueData:
                     print("CF[%d] is not in g_opt_list_attrs" % (cf_data.id))
 
         #/* 更新情報の取得 */
+        self.journals = []
         if (hasattr(issue, 'journals')):
             for journal in issue.journals:
                 journal_data = cJournalData(journal.id, journal.created_on, get_user_data_by_id(journal.user.id))
                 for detail in journal.details:
-                    detail_data = cDetailData(detail)
+                    detail_data = cDetailData()
+                    detail_data.set_detail(detail)
+#                   print("    detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, detail_data.old_val, detail_data.new_val))
                     if (detail_data.filter_check()):
                         journal_data.filter = 1
-                        journal_data.details.append(detail_data)
+
+                    journal_data.details.append(detail_data)
 
                 journal_data.notes = omit_multi_line_str(getattr(journal, 'notes', ""))
-                self.append_journal_data(journal_data)
+                self.journals.append(journal_data)
 
         #/* 作業時間情報の取得 */
         total_spent_hours = 0
+        self.time_entries = []
         if (hasattr(issue, 'time_entries')):
             for time_entry in issue.time_entries:
-                te_data = find_time_entry(time_entry)
+                te_data = find_time_entry(time_entry.id)
                 if (te_data != None):
                     self.time_entries.append(te_data)
                     total_spent_hours += te_data.hours
@@ -436,16 +615,6 @@ class cIssueData:
             self.total_spent_hours = issue.total_spent_hours
         else:
             self.total_spent_hours = total_spent_hours
-
-        return
-
-
-    #/*****************************************************************************/
-    #/* 更新情報の登録                                                            */
-    #/*****************************************************************************/
-    def append_journal_data(self, journal_data):
-        if (journal_data.filter > 0) or (journal_data.notes != ""):
-            self.journals.append(journal_data)
 
         return
 
@@ -486,17 +655,42 @@ class cIssueData:
             for detail_data in journal_data.details:
                 old_val = omit_multi_line_str(detail_data.old_val)
                 new_val = omit_multi_line_str(detail_data.new_val)
-                print("    Detail[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
+                if (detail_data.filter_check()):
+                    print("    Detail(o)[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
+                else:
+                    print("    Detail(x)[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
 
         return
 
 
 #/*****************************************************************************/
-#/* セルの値の取得(整数)                                                      */
+#/* KEYとVALUEの情報を[KEY]VALUE形式のSTRに変換                               */
+#/*****************************************************************************/
+def append_wo_duplicate(list, item):
+    if (item in list):
+        return
+
+    list.append(item)
+    return
+
+
+#/*****************************************************************************/
+#/* KEYとVALUEの情報を[KEY]VALUE形式のSTRに変換                               */
 #/*****************************************************************************/
 def get_key_value_str(key, value):
     return "[%d]%s" % (key, value)
 
+
+#/*****************************************************************************/
+#/* [KEY]VALUE形式のSTRからKEYを取得                                          */
+#/*****************************************************************************/
+def get_key_from_kv_str(text):
+    ret_value = 0
+
+    if (result := re_key_val_disp.match(text)):
+        ret_value = int(result.group(1))
+
+    return ret_value
 
 
 #/*****************************************************************************/
@@ -530,7 +724,12 @@ def get_cell_value_str(ws, row, col, none_value):
         return value
     elif (type(value) is int):
         return str(value)
+    elif (type(value) is float):
+        return str(value)
+    elif (type(value) is datetime.datetime):
+        return value
 
+    print("unknown type! : %s" % type(value))
     return none_value
 
 
@@ -568,7 +767,6 @@ def getattr_ex(target, attr, sub_attr, default):
     return ret_val
 
 
-
 #/*****************************************************************************/
 #/* チケット情報の読み出し                                                    */
 #/*****************************************************************************/
@@ -580,7 +778,6 @@ def get_issue_data(issue):
             return issue_data
 
     issue_data = cIssueData(issue.id)
-    issue_data.read_issue_data(issue)
     g_issue_list.append(issue_data)
     return issue_data
 
@@ -671,29 +868,26 @@ def get_custom_fieled_multiple(id):
 
 
 #/*****************************************************************************/
-#/* カスタムフィールドの表示値の取得                                          */
+#/* 作業時間情報の検索                                                        */
 #/*****************************************************************************/
-def get_custom_fieled_disp_value(id, value):
-    if (get_custom_fieled_format(id) == "user"):
-        if (value == None):
-            return NONE_USER.name
+def find_time_entry(te_id):
+    global g_time_entry_list
 
-        if (value == ""):
-            return NONE_USER.name
+    for te_data in g_time_entry_list:
+        if (te_data.id == te_id):
+            return te_data
 
-        return get_user_data_by_id(int(value)).name
-
-    return value
+    return None
 
 
 #/*****************************************************************************/
 #/* 作業時間情報の検索                                                        */
 #/*****************************************************************************/
-def find_time_entry(te):
+def update_time_entry(te_id):
     global g_time_entry_list
 
     for te_data in g_time_entry_list:
-        if (te_data.id == te.id):
+        if (te_data.id == te_id):
             return te_data
 
     return None
@@ -704,8 +898,6 @@ def find_time_entry(te):
 #/*****************************************************************************/
 def get_user_data(redmine, user):
     global g_user_list
-    global g_time_entry_list
-    global g_target_project_list
 
     if (user == None):
         return cUserData(0, "不明なユーザー")
@@ -716,20 +908,8 @@ def get_user_data(redmine, user):
 
     user_data = cUserData(user.id, user.name)
 
-    for project_data in g_target_project_list:
-        time_entries = redmine.time_entry.filter(project_id = project_data.id, user_id = user.id)
-        for time_entry in time_entries:
-            te = cTimeEntryData(time_entry.id, time_entry.created_on, time_entry.spent_on, time_entry.hours, time_entry.user)
-            te.project_name = time_entry.project.name
-            te.issue_id     = getattr_ex(time_entry, 'issue', 'id', 0)
-            te.updated_on   = time_entry.updated_on
-            te.activity     = time_entry.activity
-            print("TimeEntry[%s][%s]spent on : %s  %s hours by %s for #%s in %s, activity : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.user.name, te.issue_id, te.project_name, te.activity))
-            user_data.time_entries.append(te)
-            g_time_entry_list.append(te)
-
+    print("[%d]:%s" % (user_data.id, user_data.name))
     g_user_list.append(user_data)
-    print("New user! [%d]:%s" % (user_data.id, user_data.name))
     return user_data
 
 
@@ -762,19 +942,23 @@ def read_setting_file(file_path):
     global g_opt_list_attrs
     global g_opt_include_sub_prj
     global g_opt_journal_filters
+    global g_opt_redmine_version
+    global g_opt_setting_file
 
+    g_opt_setting_file = file_path
     f = open(file_path, 'r')
     lines = f.readlines()
 
     re_opt_url        = re.compile(r"URL\s+: ([^\n]+)")
     re_opt_api_key    = re.compile(r"API KEY\s+: ([^\n]+)")
     re_opt_out_file   = re.compile(r"OUT FILE NAME\s+: ([^\n]+)")
-    re_opt_in_file    = re.compile(r"IN FILE NAME\s+: ([^\n]+)")
+    re_opt_in_file    = re.compile(r"IN  FILE NAME\s+: ([^\n]+)")
     re_opt_tgt_prj    = re.compile(r"TARGET PROJECT\s+: ([^\n]+)")
     re_opt_list_attr  = re.compile(r"ISSUE LIST ATTR\s+: ([^\n]+)")
     re_opt_list_cf    = re.compile(r"ISSUE LIST CF\s+: ([0-9]+)")
     re_opt_sub_prj    = re.compile(r"INCLUDE SUB PRJ\s+: ([^\n]+)")
     re_opt_filter     = re.compile(r"JOURNAL FILTER\s+: ([^\n]+)")
+    re_opt_version    = re.compile(r"REDMINE VERSION\s+: ([^\n]+)")
 
     journal_append = 0
     for line in lines:
@@ -802,6 +986,8 @@ def read_setting_file(file_path):
             g_opt_include_sub_prj = int(result.group(1))
         elif (result := re_opt_filter.match(line)):
             g_opt_journal_filters.append(result.group(1))
+        elif (result := re_opt_version.match(line)):
+            g_opt_redmine_version = result.group(1)
 
     if (journal_append > 0):
         g_opt_list_attrs.append('journals')
@@ -913,9 +1099,9 @@ def get_version_str(version_id):
 
     for version_data in g_version_list:
         if (version_id == version_data.id):
-            return version_data.name
+            return "[%d]%s" % (version_id, version_data.name)
 
-    return "-"
+    return "[0]-"
 
 
 #/*****************************************************************************/
@@ -924,12 +1110,14 @@ def get_version_str(version_id):
 def check_project_info(redmine):
     global g_opt_target_projects
     global g_target_project_list
+    global g_project_id_dic
 
     print("--------------------------------- Check Project Datas ---------------------------------")
     projects = redmine.project.all()
 
     #/* 対象プロジェクトからIDを取得 */
     for project in projects:
+        g_project_id_dic[project.id] = project.name
         for target in g_opt_target_projects:
             if (target == project.name):
                 project_data = cProjectData(project)
@@ -966,12 +1154,12 @@ def check_user_info(redmine):
 def check_custom_fields(redmine):
     global g_cf_type_list
 
-    print("--------------------------------- Check Custome Fields ---------------------------------")
+    print("--------------------------------- Check Custom Fields ---------------------------------")
     fields = redmine.custom_field.all()
     for cf in fields:
         cf_type = cCustomFieledType(cf)
         if (cf_type.type == "issue"):
-            print("Custom Field[%s][%s]:%s" % (cf_type.id, cf_type.name, cf_type.format))
+            print("  [%d][%s]:%s" % (cf_type.id, cf_type.name, cf_type.format))
             g_cf_type_list.append(cf_type)
 
     return
@@ -988,9 +1176,10 @@ def check_issue_status(redmine):
     print("--------------------------------- Check Issue Status Types ---------------------------------")
     for status in statuses:
         status_type = cIssueStatusType(status)
-        print("[%s][%s] is_closed : %d" % (status_type.id, status_type.name, status_type.is_closed))
+        print("  [%d][%s] is_closed : %d" % (status_type.id, status_type.name, status_type.is_closed))
         g_status_type_list.append(status_type)
 
+    return
 
 #/*****************************************************************************/
 #/* チケットステータス名の取得                                                */
@@ -1006,6 +1195,51 @@ def get_issue_status_name(status_id):
 
 
 #/*****************************************************************************/
+#/* トラッカー名の取得                                                        */
+#/*****************************************************************************/
+def check_tracker_id(redmine):
+    global g_tracker_id_dic
+
+    print("--------------------------------- Check Tracker Types ---------------------------------")
+    trackers = redmine.tracker.all()
+
+    for tracker in trackers:
+        g_tracker_id_dic[tracker.id] = tracker.name
+        print("  [%d]%s" % (tracker.id, tracker.name))
+    return
+
+
+#/*****************************************************************************/
+#/* 選択肢情報の取得                                                          */
+#/*****************************************************************************/
+def check_enumerations(redmine):
+    global g_enum_priority_dic
+    global g_enum_activity_dic
+    global g_enum_category_dic
+
+    time_entry_activities = redmine.enumeration.filter(resource='time_entry_activities')
+    issue_priorities      = redmine.enumeration.filter(resource='issue_priorities')
+    document_categories   = redmine.enumeration.filter(resource='document_categories')
+
+    print("--------------------------------- Check Enumeration Types ---------------------------------")
+    print("[作業分類]")
+    for tea in time_entry_activities:
+        print("  [%d]%s" % (tea.id, tea.name))
+        g_enum_activity_dic[tea.id] = tea.name
+
+    print("[チケットの優先度]")
+    for priority in issue_priorities:
+        print("  [%d]%s" % (priority.id, priority.name))
+        g_enum_priority_dic[priority.id] = priority.name
+
+    print("[文書カテゴリ]")
+    for doc_cat in document_categories:
+        print("  [%d]%s" % (doc_cat.id, doc_cat.name))
+        g_enum_category_dic[doc_cat.id] = doc_cat.name
+
+    return
+
+#/*****************************************************************************/
 #/* 結果フォーマット行出力                                                    */
 #/*****************************************************************************/
 def output_issue_list_format_line(ws):
@@ -1018,7 +1252,7 @@ def output_issue_list_format_line(ws):
             ws.cell(row,     col).value = item
             ws.cell(row + 1, col).value = ATTR_NAME_DIC[item]
             if (item == 'journals'):
-                ws.cell(row + 1, col + 1).value = '更新日'
+                ws.cell(row + 1, col + 1).value = '更新日時'
                 ws.cell(row + 1, col + 2).value = '更新者'
                 ws.cell(row + 1, col + 3).value = 'コメント'
                 ws.cell(row + 1, col + 4).value = '詳細'
@@ -1043,30 +1277,34 @@ def output_issue_list_line(ws, row, issue_data):
     offset = 0
     for item in g_opt_list_attrs:
         if (item != 'journals'):
-            print("disp attr : %s" % item)
+#           print("disp attr : %s" % item)
             ws.cell(row, col).value = issue_data.get_disp_attr(item)
         else:
             for journal in issue_data.journals:
-                ws.cell(row + offset, col    ).value = journal.id
-                ws.cell(row + offset, col + 1).value = journal.created_on
-                ws.cell(row + offset, col + 2).value = journal.user.name
-                ws.cell(row + offset, col + 3).value = journal.notes
-                for detail in journal.details:
-                    ws.cell(row + offset, col + 4).value = detail.property
-                    ws.cell(row + offset, col + 5).value = detail.get_disp_name()
-                    ws.cell(row + offset, col + 6).value = detail.get_disp_old_value()
-                    ws.cell(row + offset, col + 7).value = detail.get_disp_new_value()
-                    offset += 1
+                if (journal.is_filter_pass()):
+                    ws.cell(row + offset, col    ).value = journal.id
+                    ws.cell(row + offset, col + 1).value = journal.created_on
+                    ws.cell(row + offset, col + 2).value = get_key_value_str(journal.user.id, journal.user.name)
+                    ws.cell(row + offset, col + 3).value = journal.notes
+                    detail_count = 0
+                    for detail in journal.details:
+                        if (detail.filter):
+                            ws.cell(row + offset, col + 4).value = detail.property
+                            ws.cell(row + offset, col + 5).value = detail.get_disp_name()
+                            ws.cell(row + offset, col + 6).value = detail.get_disp_old_value()
+                            ws.cell(row + offset, col + 7).value = detail.get_disp_new_value()
+                            detail_count += 1
+                            offset += 1
 
-                if (len(journal.details) == 0):
-                    offset += 1                       #/* 詳細データがない場合のみ、次の行に進む */
+                    if (detail_count == 0):
+                        offset += 1                       #/* 詳細データがない場合のみ、次の行に進む */
 
             col += 6
 
         col += 1
 
     if (offset > 0):
-        offset -= 1          #/* 1行目のjournalはカウントしないため、引いておく */
+        offset -= 1          #/* 1行目のjournalはカウントしないため、引いておく(戻り値はExtraの行数) */
 
     return offset
 
@@ -1078,7 +1316,6 @@ def output_all_issues_list(ws):
     global g_issue_list
 
     print("--------------------------------- Output Issue List ---------------------------------")
-    ws.title = "チケット一覧"
     output_issue_list_format_line(ws)
     row = 3
     for issue_data in g_issue_list:
@@ -1089,18 +1326,296 @@ def output_all_issues_list(ws):
 
 
 #/*****************************************************************************/
+#/* 作業時間出力                                                              */
+#/*****************************************************************************/
+def output_all_time_entries(ws):
+    global g_time_entry_list
+
+    row = 1
+    col = 1
+    ws.cell(row, col).value = '#'
+    col += 1
+    ws.cell(row, col).value = '作成日時'
+    col += 1
+    ws.cell(row, col).value = '作業日'
+    col += 1
+    ws.cell(row, col).value = '作業時間'
+    col += 1
+    ws.cell(row, col).value = '作業プロジェクト'
+    col += 1
+    ws.cell(row, col).value = '作業チケット'
+    col += 1
+    ws.cell(row, col).value = '作業分類'
+    col += 1
+    ws.cell(row, col).value = '作業者'
+    col += 1
+    ws.cell(row, col).value = '更新日'
+    col += 1
+
+    row = 2
+    for te in g_time_entry_list:
+        col = 1
+        ws.cell(row, col).value = te.id
+        col += 1
+        ws.cell(row, col).value = te.created_on
+        col += 1
+        ws.cell(row, col).value = te.spent_on
+        col += 1
+        ws.cell(row, col).value = te.hours
+        col += 1
+        ws.cell(row, col).value = te.project_name
+        col += 1
+        ws.cell(row, col).value = te.issue_id
+        col += 1
+        ws.cell(row, col).value = te.activity
+        col += 1
+        ws.cell(row, col).value = get_key_value_str(te.user.id, te.user.name)
+        col += 1
+        ws.cell(row, col).value = te.updated_on
+        col += 1
+        row += 1
+
+    return
+
+
+#/*****************************************************************************/
+#/* 設定値の出力                                                              */
+#/*****************************************************************************/
+def output_settings(ws):
+    global g_opt_url
+    global g_opt_setting_file
+    global g_target_project_list
+    global g_opt_redmine_version
+    global g_opt_include_sub_prj
+    global g_opt_in_file
+    global g_opt_list_attrs
+    global g_opt_journal_filters
+    global g_opt_full_issues
+
+    print("--------------------------------- Output Settings ---------------------------------")
+
+    row = 1
+    ws.cell(row, 1).value = 'Redmineバージョン指定'
+    if (g_opt_redmine_version != None):
+        ws.cell(row, 2).value = g_opt_redmine_version
+    else:
+        ws.cell(row, 2).value = '-'
+    row += 1
+
+    ws.cell(row, 1).value = 'URL'
+    ws.cell(row, 2).value = g_opt_url
+    row += 1
+
+    ws.cell(row, 1).value = '設定ファイル'
+    ws.cell(row, 2).value = g_opt_setting_file
+    row += 1
+
+    ws.cell(row, 1).value = 'ターゲットプロジェクト'
+    col = 2
+    for project in g_target_project_list:
+        ws.cell(row, col).value = project.name
+        col += 1
+    row += 1
+
+    ws.cell(row, 1).value = 'サブプロジェクト'
+    if (g_opt_include_sub_prj):
+        ws.cell(row, 2).value = "含む"
+    else:
+        ws.cell(row, 2).value = "含まない"
+    row += 1
+
+    ws.cell(row, 1).value = '入力ファイル'
+    ws.cell(row, 2).value = g_opt_in_file
+    row += 1
+
+    ws.cell(row, 1).value = '表示するチケット属性'
+    col = 2
+    for attr in g_opt_list_attrs:
+        ws.cell(row, col).value = attr
+        col += 1
+    row += 1
+
+    ws.cell(row, 1).value = '更新チェックフィルター'
+    col = 2
+    for filter in g_opt_journal_filters:
+        ws.cell(row, col).value = filter
+        col += 1
+    row += 1
+
+    ws.cell(row, 1).value = '全チケットデータ取得'
+    col = 2
+    if (g_opt_full_issues):
+        ws.cell(row, col).value = "YES"
+    else:
+        ws.cell(row, col).value = "NO"
+    row += 1
+
+    return
+
+#/*****************************************************************************/
+#/* 各種ID一覧出力                                                            */
+#/*****************************************************************************/
+def output_id_list(ws):
+    global g_user_list
+    global g_project_id_dic
+    global g_tracker_id_dic
+    global g_status_type_list
+    global g_version_list
+    global g_cf_type_list
+    global g_enum_priority_dic
+    global g_enum_activity_dic
+    global g_enum_category_dic
+
+    print("--------------------------------- Output ID List ---------------------------------")
+
+    row = 1
+    col = 1
+    ws.cell(row, col).value = 'ユーザーID'
+    col += 2
+    ws.cell(row, col).value = 'プロジェクトID'
+    col += 2
+    ws.cell(row, col).value = 'トラッカーID'
+    col += 2
+    ws.cell(row, col).value = 'ステータスID'
+    col += 2
+    ws.cell(row, col).value = 'バージョンID'
+    col += 2
+    ws.cell(row, col).value = 'カスタムフィールドID'
+    col += 2
+    ws.cell(row, col).value = '選択項目'
+    col += 2
+
+    row = 2
+    col = 1
+    for user_data in g_user_list:
+        ws.cell(row, col    ).value = user_data.id
+        ws.cell(row, col + 1).value = user_data.name
+        row += 1
+
+    row = 2
+    col = 3
+    for key, value in g_project_id_dic.items():
+        ws.cell(row, col    ).value = key
+        ws.cell(row, col + 1).value = value
+        row += 1
+
+    row = 2
+    col = 5
+    for key, value in g_tracker_id_dic.items():
+        ws.cell(row, col    ).value = key
+        ws.cell(row, col + 1).value = value
+        row += 1
+
+    row = 2
+    col = 7
+    for status_type in g_status_type_list:
+        ws.cell(row, col    ).value = status_type.id
+        ws.cell(row, col + 1).value = status_type.name
+        row += 1
+
+    row = 2
+    col = 9
+    for version in g_version_list:
+        ws.cell(row, col    ).value = version.id
+        ws.cell(row, col + 1).value = version.name
+        row += 1
+
+    row = 2
+    col = 11
+    for cf_type in g_cf_type_list:
+        ws.cell(row, col    ).value = cf_type.id
+        ws.cell(row, col + 1).value = cf_type.name
+        row += 1
+
+    row = 2
+    col = 13
+    ws.cell(row, col    ).value = 'プライオリティ'
+    row += 1
+    for key, value in g_enum_priority_dic.items():
+        ws.cell(row, col    ).value = key
+        ws.cell(row, col + 1).value = value
+        row += 1
+
+    ws.cell(row, col    ).value = '活動種別'
+    row += 1
+    for key, value in g_enum_activity_dic.items():
+        ws.cell(row, col    ).value = key
+        ws.cell(row, col + 1).value = value
+        row += 1
+
+    ws.cell(row, col    ).value = '文書カテゴリ'
+    row += 1
+    for key, value in g_enum_category_dic.items():
+        ws.cell(row, col    ).value = key
+        ws.cell(row, col + 1).value = value
+        row += 1
+
+    return
+
+
+#/*****************************************************************************/
 #/* 結果出力                                                                  */
 #/*****************************************************************************/
 def output_datas():
     global g_opt_out_file
+    global g_issue_list
+    global g_time_entry_list
+
+    g_issue_list      = sorted(g_issue_list,      key=lambda issue: issue.id)
+    g_time_entry_list = sorted(g_time_entry_list, key=lambda te:    te.id)
 
     print("--------------------------------- Output Redmine Datas ---------------------------------")
     wb = openpyxl.Workbook()
-    output_all_issues_list(wb.worksheets[0])
-
+    ws = wb.worksheets[0]
+    ws.title = "チケット一覧"
+    output_all_issues_list(ws)
+    output_all_time_entries(wb.create_sheet(title = "作業時間一覧"))
+    output_id_list(wb.create_sheet(title = "ID一覧"))
+    output_settings(wb.create_sheet(title = "設定値"))
     wb.save(g_opt_out_file)
     return
 
+
+
+#/*****************************************************************************/
+#/* 作業時間チェック                                                          */
+#/*****************************************************************************/
+def time_entry_check(redmine, is_full_check):
+    global g_time_entry_list
+    global g_target_project_list
+    global g_user_list
+    global g_opt_include_sub_prj
+    global g_time_entries_ts
+
+    if (g_opt_include_sub_prj == 0):
+        l_subproject = '!*'
+    else:
+        l_subproject = '*'
+
+    if (is_full_check):
+        print("--------------------------------- Time Entries Check Full ---------------------------------")
+        for user_data in g_user_list:
+            for project_data in g_target_project_list:
+                time_entries = redmine.time_entry.filter(project_id = project_data.id, subproject_id = l_subproject, user_id = user_data.id)
+                for time_entry in time_entries:
+                    te = cTimeEntryData(time_entry.id)
+                    te.set_data_by_time_entry(time_entry)
+                    g_time_entries_ts.created_timestamp(te.created_on)
+                    g_time_entries_ts.updated_timestamp(te.updated_on)
+
+                    print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
+                    user_data.time_entries.append(te)
+                    g_time_entry_list.append(te)
+    else:
+        last_created = g_time_entries_ts.created_on.date()
+        last_updated = g_time_entries_ts.updated_on.date()
+        created_option = '>=%s' % last_created
+        updated_option = '>=%s' % last_updated
+
+        print("--------------------------------- Time Entries Check Created onwards %s ---------------------------------" % (last_created))
+        print("--------------------------------- Time Entries Check Updated onwards %s ---------------------------------" % (last_updated))
+
+    return
 
 
 #/*****************************************************************************/
@@ -1112,18 +1627,21 @@ def full_issue_check(redmine):
 
     print("--------------------------------- Full Issue Check ---------------------------------")
     for project_data in g_target_project_list:
+        if (g_opt_include_sub_prj == 0):
+            l_subproject = '!*'
+        else:
+            l_subproject = '*'
+
         filter_offset = 0
         while(1):
-            print("--------------------------------- ProjectID : %d, Filter Offset %d ---------------------------------" % (project_data.id, filter_offset))
-            if (g_opt_include_sub_prj == 0):
-                issues = redmine.issue.filter(project_id = project_data.id, subproject_id = '!*', status_id = '*', limit = g_filter_limit, offset = filter_offset)
-            else:
-                issues = redmine.issue.filter(project_id = project_data.id, status_id = '*', limit = g_filter_limit, offset = filter_offset)
+            issues = redmine.issue.filter(project_id = project_data.id, subproject_id = l_subproject, status_id = '*', limit = g_filter_limit, offset = filter_offset)
             if (len(issues) == 0):
                 break
 
+            print("--------------------------------- ProjectID : %d, Filter Offset %d ---------------------------------" % (project_data.id, filter_offset))
             for issue in issues:
                 issue_data = get_issue_data(issue)
+                issue_data.read_issue_data(issue)
                 issue_data.print_issue_data()
 
             filter_offset += g_filter_limit
@@ -1131,25 +1649,147 @@ def full_issue_check(redmine):
     return
 
 
+#/*****************************************************************************/
+#/* チケット確認(新規・更新)                                                  */
+#/*****************************************************************************/
+def issue_check(redmine):
+    global g_filter_limit
+    global g_opt_include_sub_prj
+    global g_issues_ts
 
+    last_created = g_issues_ts.created_on.date()
+    last_updated = g_issues_ts.updated_on.date()
+    print("--------------------------------- Created / Updated Issue Check ---------------------------------")
+#   print("  last created : %s" % last_created)
+#   print("  last created : %s" % last_updated)
+
+    for project_data in g_target_project_list:
+        if (g_opt_include_sub_prj == 0):
+            l_subproject = '!*'
+        else:
+            l_subproject = '*'
+
+        created_option = '>=%s' % last_created
+        updated_option = '>=%s' % last_updated
+        filter_offset = 0
+        while(1):
+            issues = redmine.issue.filter(project_id = project_data.id, subproject_id = l_subproject, status_id = '*', limit = g_filter_limit, offset = filter_offset, created_on = created_option)
+            if (len(issues) == 0):
+                break
+
+            print("--------------------------------- ProjectID : %d, Created onwards %s Filter Offset %d ---------------------------------" % (project_data.id, last_created, filter_offset))
+            for issue in issues:
+                issue_data = get_issue_data(issue)
+                issue_data.read_issue_data(issue)
+                issue_data.print_issue_data()
+
+            filter_offset += g_filter_limit
+
+        filter_offset = 0
+        while(1):
+            issues = redmine.issue.filter(project_id = project_data.id, subproject_id = l_subproject, status_id = '*', limit = g_filter_limit, offset = filter_offset, updated_on = updated_option)
+            if (len(issues) == 0):
+                break
+
+            print("--------------------------------- ProjectID : %d, Updated onwards %s Filter Offset %d ---------------------------------" % (project_data.id, last_updated, filter_offset))
+            for issue in issues:
+                issue_data = get_issue_data(issue)
+                issue_data.read_issue_data(issue)
+                issue_data.print_issue_data()
+
+            filter_offset += g_filter_limit
+
+    return
+
+
+#/*****************************************************************************/
+#/* チケット属性読み出し                                                    */
+#/*****************************************************************************/
+def read_journal_lines(ws, row, issue_data, j_col, d_col):
+    offset = 0
+    next_id = issue_data.id
+    while(1):
+        journal_id  = get_cell_value_str(ws, row + offset, j_col,     "")
+        detail_prop = get_cell_value_str(ws, row + offset, d_col    , "")
+        detail_name = get_cell_value_str(ws, row + offset, d_col + 1, "")
+        detail_old  = get_cell_value_str(ws, row + offset, d_col + 2, "")
+        detail_new  = get_cell_value_str(ws, row + offset, d_col + 3, "")
+#       print("row = %d, jID = %s, prop = %s, next_id = %d" % (row + offset, journal_id, detail_prop, next_id))
+
+        #/* 「チケット番号、更新ID、詳細がすべて空」 OR 「次の行のIDが0以外で、異なるIDであった場合、ループ終了」 */
+        if ((journal_id == "") and (detail_prop == "") and (next_id == 0)) or ((next_id != 0) and (next_id != issue_data.id)):
+            break
+
+        if (journal_id != ""):
+            journal_data = cJournalData(int(journal_id), "", NONE_USER)
+            journal_data.created_on = get_cell_value_str(ws, row + offset, j_col + 1, "")
+
+            user_str                = get_cell_value_str(ws, row + offset, j_col + 2, "")
+            journal_data.user       = get_user_data_by_id(get_key_from_kv_str(user_str))
+            journal_data.notes      = get_cell_value_str(ws, row + offset, j_col + 3, "")
+            journal_data.filter     = 1
+            issue_data.journals.append(journal_data)
+
+        if (detail_prop != ""):
+            detail_data = cDetailData()
+            detail_data.set_str_data(detail_prop, detail_name, detail_old, detail_new)
+            journal_data.details.append(detail_data)
+
+
+        offset += 1
+
+        #/* 次の行のチケットIDを取得 */
+        next_id = get_cell_value_digit(ws, row + offset, 1, 0)
+
+
+    if (offset > 0):
+        offset -= 1
+
+    return offset
 
 
 #/*****************************************************************************/
 #/* チケット属性読み出し                                                    */
 #/*****************************************************************************/
 def read_attr_value(issue_data, attr, value):
+    global g_issues_ts
 
     if (result := re_cf_data.match(attr)):
         #/* カスタムフィールドの場合 */
-        cf_id = int(result.group(1))
-        cf_name = get_custom_fieled_name(cf_id)
-        if (get_custom_fieled_format(cf_id) == "user"):
-            print("get cf_%d, user : %s" % (cf_id, value))
-            if (result := re_user_disp.match(value)):
-                cf_val = int(result.group(1))
-                print("get cf, user_id : %s" % (cf_val))
+        if (value == ""):
+            return
+
+        cf_id    = int(result.group(1))
+        cf_name  = get_custom_fieled_name(cf_id)
+        multiple = get_custom_fieled_multiple(cf_id)
+        format   = get_custom_fieled_format(cf_id)
+
+        if (format == 'user') or (format == 'version') or (format == 'enumeration'):
+            #/* カスタムフィールドでユーザー／バージョン／enum情報の場合 */
+            if (multiple):
+                cf_val = []
+#               print("cf user/version/enum multiple : %s" % value)
+                if (value == None) or (value == ""):
+                    pass
+                else:
+                    tmp_vals = value.split("\n")
+                    for tmp_val in tmp_vals:
+                        tmp_val_int = get_key_from_kv_str(tmp_val)
+                        if (tmp_val_int != 0):
+                            cf_val.append(str(tmp_val_int))
             else:
-                cf_val = 0
+#               print("get cf_%d, user : %s" % (cf_id, value))
+                cf_val = str(get_key_from_kv_str(value))
+        elif (format == 'date'):
+            if (type(value) is datetime.datetime):
+                cf_val = value.date()
+            else:
+                cf_val = value
+        elif (multiple):
+            cf_val = []
+            tmp_vals = value.split("\n")
+            for tmp_val in tmp_vals:
+                cf_val.append(tmp_val)
         else:
             cf_val = value
 
@@ -1158,19 +1798,113 @@ def read_attr_value(issue_data, attr, value):
 
     elif (attr == 'author') or (attr == 'assigned_to'):
         #/* ユーザー情報の場合 */
-        result = re_user_disp.match(value)
-        if (result):
-            print("find user! attr:%s,  val:%s" % (attr, value))
-            setattr(issue_data, attr, get_user_data_by_id(int(result.group(1))))
+        setattr(issue_data, attr, get_user_data_by_id(get_key_from_kv_str(value)))
+    elif (attr == 'children'):
+        if (value == ""):
+            issue_data.children = []
         else:
-            print("no user! attr:%s,  val:%s" % (attr, user_info))
-            setattr(issue_data, attr, NONE_USER)
-    elif (attr != ""):
+            tmp_vals = value.split("\n")
+            for tmp_val in tmp_vals:
+                issue_data.children.append(int(tmp_val))
+    elif (attr == 'done_ratio') or (attr == 'parent'):
+        setattr(issue_data, attr, int(value))
+    elif (attr == 'total_spent_hours') or (attr == 'estimated_hours'):
+        if (value == None) or (value == ''):
+            setattr(issue_data, attr, None)
+        else:
+            setattr(issue_data, attr, float(value))
+    elif (attr == 'due_date'):
+        if (type(value) is datetime.datetime):
+            setattr(issue_data, attr, value.date())
+        else:
+            setattr(issue_data, attr, value)
+    elif (attr == 'created_on'):
+        setattr(issue_data, attr, value)
+        g_issues_ts.created_timestamp(value)
+    elif (attr == 'updated_on'):
+        setattr(issue_data, attr, value)
+        g_issues_ts.updated_timestamp(value)
+    elif (attr != ''):
         setattr(issue_data, attr, value)
 
     return
 
 
+
+#/*****************************************************************************/
+#/* 作業時間一覧の読み込み                                                    */
+#/*****************************************************************************/
+def read_time_entry_list(ws):
+    global g_time_entry_list
+    global g_time_entries_ts
+    print("--------------------------------- Read Time Entry List! ---------------------------------")
+
+    row = 1
+    col = 1
+    id_def = get_cell_value_str(ws, row, col, "")
+    if (id_def != '#'):
+        print("  このシートは読み込めません！")
+        return
+
+    row = 2
+    while (ws.cell(row, 1).value != None):
+        col = 1
+
+        #/* ID(int) */
+        te_id = get_cell_value_digit(ws, row, col, 0)
+        col += 1
+
+        #/* 作成日時(datetime) */
+        te_created_on = get_cell_value_str(ws, row, col, 0)
+        g_time_entries_ts.created_timestamp(te_created_on)
+        col += 1
+
+        #/* 作業日（date） */
+        te_spent_on = get_cell_value_str(ws, row, col, 0)
+        te_spent_on = te_spent_on.date()
+        col += 1
+
+        #/* 作業時間(float) */
+        te_hours = float(get_cell_value_str(ws, row, col, 0))
+        col += 1
+
+        #/* プロジェクト(str) */
+        te_project = get_cell_value_str(ws, row, col, 0)
+        col += 1
+
+        #/* チケット番号(int) */
+        te_issue_id = get_cell_value_digit(ws, row, col, 0)
+        col += 1
+
+        #/* 活動内容(str) */
+        te_activity = get_cell_value_str(ws, row, col, 0)
+        col += 1
+
+        #/* ユーザー */
+        te_user = get_user_data_by_id(get_key_from_kv_str(ws.cell(row, col).value))
+        col += 1
+
+        #/* 更新日 */
+        te_updated_on = get_cell_value_str(ws, row, col, 0)
+        g_time_entries_ts.updated_timestamp(te_updated_on)
+        col += 1
+
+        te = cTimeEntryData(te_id)
+        te.created_on   = te_created_on
+        te.spent_on     = te_spent_on
+        te.hours        = te_hours
+        te.user         = te_user
+        te.project_name = te_project
+        te.issue_id     = te_issue_id
+        te.updated_on   = te_updated_on
+        te.activity     = te_activity
+        print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
+        te_user.time_entries.append(te)
+        g_time_entry_list.append(te)
+
+        row += 1
+
+    return
 
 #/*****************************************************************************/
 #/* チケット一覧の読み込み                                                    */
@@ -1180,7 +1914,6 @@ def read_issue_list(ws):
 
     row = 1
     col = 1
-
     id_def = get_cell_value_str(ws, row, col, "")
     if (id_def != 'id'):
         print("  このシートは読み込めません！")
@@ -1196,16 +1929,18 @@ def read_issue_list(ws):
             break
         col += 1
 
-    print("journal_col:%d" % (journal_col))
+    if (journal_col == 0):
+        journal_col = col                       #/* 見つからなかった場合は、末尾の列を指しておく(detail_colはゼロのまま) */
 
+#   print("journal_col:%d" % (journal_col))
 
     row = 3
     while (1):
         col = 1
-        id = get_cell_value_digit(ws, row, col, 0)
-        print("issue id:%d" % (id))
+        issue_id = get_cell_value_digit(ws, row, col, 0)
+#       print("issue id:%d" % (issue_id))
 
-        if (id == 0):
+        if (issue_id == 0):
             if (detail_col == 0):
                 #/* 更新データの列がない場合は、即終了 */
                 break
@@ -1216,12 +1951,17 @@ def read_issue_list(ws):
                     #/* IDもJournalもDetailもなければ終了 */
                     break
         else:
-            issue_data = get_issue_data_by_id(id)
+            print("  read issue id[%d]" % issue_id)
+            issue_data = get_issue_data_by_id(issue_id)
             for col in range(2, journal_col):
                 attr_name = get_cell_value_str(ws, 1, col, "")
-                print("attr:%s" % (attr_name))
+#               print("attr:%s, value:%s" % (attr_name, get_cell_value_str(ws, row, col, "")))
                 read_attr_value(issue_data, attr_name, get_cell_value_str(ws, row, col, ""))
 
+            #/* 更新データの読み込み */
+            if (detail_col > 0):
+                offset = read_journal_lines(ws, row, issue_data, journal_col, detail_col)
+                row += offset
         row += 1
     return
 
@@ -1233,11 +1973,16 @@ def read_in_file():
     global g_opt_in_file
 
     print("--------------------------------- Read Input File : %s ---------------------------------" % (g_opt_in_file))
+    if (g_opt_in_file == ''):
+        return
+
     wb = openpyxl.load_workbook(g_opt_in_file, data_only=True)
 
     for ws in wb.worksheets:
         if (ws.title == "チケット一覧"):
             read_issue_list(ws)
+        elif (ws.title == "作業時間一覧"):
+            read_time_entry_list(ws)
         else:
             print("skip ws : %s" % ws.title)
 
@@ -1254,27 +1999,31 @@ def main():
     global g_opt_url
     global g_opt_full_issues
     global g_opt_api_key
-    global g_issue_list
+    global g_opt_redmine_version
 
     check_command_line_option()
     start_time = log_start()
 
     if (g_opt_api_key == ""):
-        redmine = Redmine(g_opt_url, username=g_opt_user_name, password=g_opt_pass)
+        redmine = Redmine(g_opt_url, username=g_opt_user_name, password=g_opt_pass, version = g_opt_redmine_version)
     else:
-        redmine = Redmine(g_opt_url, key=g_opt_api_key)
+        redmine = Redmine(g_opt_url, key=g_opt_api_key, version = g_opt_redmine_version)
 
     check_project_info(redmine)
     check_user_info(redmine)
     check_custom_fields(redmine)
     check_issue_status(redmine)
+    check_tracker_id(redmine)
+    check_enumerations(redmine)
 
     if (g_opt_full_issues):
+        time_entry_check(redmine, 1)
         full_issue_check(redmine)
     else:
         read_in_file()
+        time_entry_check(redmine, 0)
+        issue_check(redmine)
 
-    g_issue_list = sorted(g_issue_list, key=lambda issue: issue.id)
     output_datas()
 
     log_end(start_time)
