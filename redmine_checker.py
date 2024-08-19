@@ -25,6 +25,7 @@ g_opt_include_sub_prj = 1
 g_opt_journal_filters = []
 g_opt_redmine_version = None
 g_opt_setting_file    = ""
+g_opt_grouping        = 0
 
 g_target_project_list = []
 g_user_list           = []
@@ -39,6 +40,7 @@ g_enum_priority_dic   = {}
 g_enum_activity_dic   = {}
 g_enum_category_dic   = {}
 g_filter_limit        = 20
+g_base_day            = datetime.date.today()
 
 
 
@@ -72,35 +74,39 @@ re_cf_data          = re.compile(r"^cf_([0-9]+)")
 
 
 #/*****************************************************************************/
-#/* 作成・更新タイムスタンプ保持                                              */
+#/* 分析処理クラス                                                            */
 #/*****************************************************************************/
-class cLatestTimeStamp:
+class cStatisticsData:
     def __init__(self):
-        self.created_on = ''
-        self.updated_on = ''
+        self.unit = "week"
+        self.start = datetime.date(1900, 1, 1)
+        self.end   = datetime.date(2100, 1, 1)
         return
 
-    def created_timestamp(self, ts):
-        if (self.created_on == ''):
-#           print("latest created! : %s < %s" % (self.created_on, ts))
-            self.created_on = ts
-        elif (self.created_on < ts):
-#           print("latest created! : %s < %s" % (self.created_on, ts))
-            self.created_on = ts
+g_statistics_data = cStatisticsData()
+
+
+#/*****************************************************************************/
+#/* タイムスタンプ保持・更新クラス                                            */
+#/*****************************************************************************/
+class cTimeStamp:
+    def __init__(self, base_ts):
+        self.timestamp  = base_ts
         return
 
-    def updated_timestamp(self, ts):
-        if (self.updated_on == ''):
-#           print("latest updated! : %s < %s" % (self.updated_on, ts))
-            self.updated_on = ts
-        elif (self.updated_on < ts):
-#           print("latest updated! : %s < %s" % (self.updated_on, ts))
-            self.updated_on = ts
+    def latter_timestamp(self, ts):
+        if (self.timestamp < ts):
+            self.timestamp = ts
         return
 
-g_issues_ts       = cLatestTimeStamp()
-g_time_entries_ts = cLatestTimeStamp()
+    def former_timestamp(self, ts):
+        if (self.timestamp > ts):
+            self.timestamp = ts
+        return
 
+g_latest_issues_update_ts = cTimeStamp(datetime.datetime(1900, 1, 1, 0, 0))
+g_latest_time_entry_ts    = cTimeStamp(datetime.datetime(1900, 1, 1, 0, 0))
+g_first_time_entry_date   = cTimeStamp(datetime.date(2100, 1, 1))
 
 
 
@@ -120,9 +126,10 @@ class cVersionData:
 #/*****************************************************************************/
 class cProjectData:
     def __init__(self, project):
-        self.id       = project.id
-        self.name     = project.name
-        self.versions = []
+        self.id         = project.id
+        self.name       = project.name
+        self.created_on = project.created_on
+        self.versions   = []
         return
 
 
@@ -242,6 +249,8 @@ class cDetailData:
             value = int(value)
         elif (self.name == 'total_spent_hours'):
             value = float(value)
+        elif (self.name == 'project_id'):
+            value = get_key_value_str(int(value), g_project_id_dic[int(value)]) 
 
         return value
 
@@ -267,6 +276,8 @@ class cDetailData:
             value = int(text)
         elif (self.name == 'total_spent_hours'):
             value = float(text)
+        elif (self.name == 'project_id'):
+            value = str(get_key_from_kv_str(text))
 
         return value
 
@@ -532,7 +543,7 @@ class cIssueData:
     #/* python-redmineからチケット情報の読み出し                                  */
     #/*****************************************************************************/
     def read_issue_data(self, issue):
-        global g_issues_ts
+        global g_latest_issues_update_ts
         global g_opt_list_attrs
 
         self.project           = issue.project.name
@@ -553,10 +564,8 @@ class cIssueData:
         self.assigned_to       = get_user_data_by_id(assigned_user.id)
 
         self.created_on        = getattr(issue, 'created_on', "-")
-        g_issues_ts.created_timestamp(self.created_on)
-
         self.updated_on        = getattr(issue, 'updated_on', "-")
-        g_issues_ts.updated_timestamp(self.updated_on)
+        g_latest_issues_update_ts.latter_timestamp(self.updated_on)
 
         self.closed_on         = getattr(issue, 'closed_on', "-")
         self.start_date        = getattr(issue, 'start_date', "-")
@@ -619,6 +628,73 @@ class cIssueData:
         return
 
 
+    #/********************************************************************************/
+    #/* 指定した日を越えて最初の更新データを取得する                                 */
+    #/********************************************************************************/
+    def find_detail_after_some_day(self, attr, some_date):
+        last_journal = datetime.date(1900, 1, 1)
+
+        #/* CustomFieldかどうかの判定（attrが数字であればCustomField） */
+        if (attr.isdigit()):
+            check_prop = 'cf'
+            check_name = attr
+        else:
+            #/* attrの場合、nameの変換が必要 */
+            check_prop = 'attr'
+            if (attr == 'assigned_to') or (attr == 'status') or (attr == 'fixed_version') or (attr == 'tracker') or (attr == 'priority'):
+                check_name = attr + '_id'
+            else:
+                check_name = attr
+
+        for journal in self.journals:
+            created_on_date = journal.created_on.date()
+            if (created_on_date < last_journal):
+                print("Invalid Journal Sequence! last:%s, next:%s" % (last_journal, created_on_date))
+                exit(-1)
+
+            if (some_date < created_on_date):
+                for detail in journal.details:
+                    if (detail.property == check_prop) and (detail.name == check_name):
+                        return detail
+
+            last_journal = journal.created_on.date()
+        return None
+
+
+    #/********************************************************************************/
+    #/* チケット属性の日にち指定取得(特定属性のみサポート、複数可のCFはサポート不可) */
+    #/********************************************************************************/
+    def get_attr_at_some_date(self, attr, some_date):
+        if (some_date < self.created_on.date()):
+            return None
+
+        last_journal = datetime.date(1900, 1, 1)
+
+        if (attr == 'assigned_to'):
+            detail = self.find_detail_after_some_day(attr, some_date)
+            if (detail == None):
+                #/* 更新データが見つからない場合は、当時の値がそのまま現在の値になっている */
+                return self.assigned_to
+            else:
+                #/* 更新データが見つかった場合は、old値を返す */
+                if (detail.old_val == None) or (detail.old_val == ''):
+                    old_user = NONE_USER
+                else:
+                    old_user = get_user_data_by_id(int(detail.old_val))
+
+                return old_user
+
+        elif (attr == 'status'):
+            current = self.status
+            pass
+        elif (attr == 'due_date'):
+            pass
+        else:
+            pass
+
+        return
+
+
     #/*****************************************************************************/
     #/* チケット情報のログ出力                                                    */
     #/*****************************************************************************/
@@ -661,6 +737,31 @@ class cIssueData:
                     print("    Detail(x)[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
 
         return
+
+
+#/*****************************************************************************/
+#/* 月の初日を返す                                                            */
+#/*****************************************************************************/
+def get_month_start_day(some_day, offset):
+    first_day = some_day.replace(day = 1)
+    while(offset > 0):
+        first_day = (first_day + datetime.timedelta(days=31)).replace(day = 1)
+        offset -= 1
+
+    while(offset < 0):
+        first_day = (first_day - datetime.timedelta(days=1)).replace(day = 1)
+        offset += 1
+    
+    return first_day
+
+
+#/*****************************************************************************/
+#/* 週の初日（月曜日）を返す                                                  */
+#/*****************************************************************************/
+def get_weeks_monday(some_day, offset):
+    week_day = some_day.weekday()
+    monday = some_day - datetime.timedelta(days=week_day - offset * 7)
+    return monday
 
 
 #/*****************************************************************************/
@@ -881,32 +982,19 @@ def find_time_entry(te_id):
 
 
 #/*****************************************************************************/
-#/* 作業時間情報の検索                                                        */
-#/*****************************************************************************/
-def update_time_entry(te_id):
-    global g_time_entry_list
-
-    for te_data in g_time_entry_list:
-        if (te_data.id == te_id):
-            return te_data
-
-    return None
-
-
-#/*****************************************************************************/
 #/* ユーザー情報の登録                                                        */
 #/*****************************************************************************/
-def get_user_data(redmine, user):
+def get_user_data(redmine, user_id, user_name):
     global g_user_list
 
-    if (user == None):
+    if (user_id == None):
         return cUserData(0, "不明なユーザー")
 
     for user_data in g_user_list:
-        if (user_data.id == user.id) and (user_data.name == user.name):
+        if (user_data.id == user_id) and (user_data.name == user_name):
             return user_data
 
-    user_data = cUserData(user.id, user.name)
+    user_data = cUserData(user_id, user_name)
 
     print("[%d]:%s" % (user_data.id, user_data.name))
     g_user_list.append(user_data)
@@ -944,6 +1032,8 @@ def read_setting_file(file_path):
     global g_opt_journal_filters
     global g_opt_redmine_version
     global g_opt_setting_file
+    global g_opt_grouping
+    global g_statistics_data
 
     g_opt_setting_file = file_path
     f = open(file_path, 'r')
@@ -959,6 +1049,10 @@ def read_setting_file(file_path):
     re_opt_sub_prj    = re.compile(r"INCLUDE SUB PRJ\s+: ([^\n]+)")
     re_opt_filter     = re.compile(r"JOURNAL FILTER\s+: ([^\n]+)")
     re_opt_version    = re.compile(r"REDMINE VERSION\s+: ([^\n]+)")
+    re_opt_grouping   = re.compile(r"JOURNAL GROUPING\s+: ([^\n]+)")
+    re_opt_sta_unit   = re.compile(r"STATISTICS UNIT\s+: (day|week|month)")
+    re_opt_sta_start  = re.compile(r"STATISTICS START\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
+    re_opt_sta_end    = re.compile(r"STATISTICS END\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
 
     journal_append = 0
     for line in lines:
@@ -988,6 +1082,17 @@ def read_setting_file(file_path):
             g_opt_journal_filters.append(result.group(1))
         elif (result := re_opt_version.match(line)):
             g_opt_redmine_version = result.group(1)
+        elif (result := re_opt_grouping.match(line)):
+            g_opt_grouping = int(result.group(1))
+        elif (result := re_opt_sta_unit.match(line)):
+            g_statistics_data.unit = result.group(1)
+#           print("STATISTICS UNIT  : %s" % g_statistics_data.unit)
+        elif (result := re_opt_sta_start.match(line)):
+            g_statistics_data.start = datetime.date(int(result.group(1)), int(result.group(2)), int(result.group(3)))
+#           print("STATISTICS START : %s" % g_statistics_data.start)
+        elif (result := re_opt_sta_end.match(line)):
+            g_statistics_data.end = datetime.date(int(result.group(1)), int(result.group(2)), int(result.group(3)))
+#           print("STATISTICS END   : %s" % g_statistics_data.end)
 
     if (journal_append > 0):
         g_opt_list_attrs.append('journals')
@@ -1139,11 +1244,20 @@ def check_user_info(redmine):
     print("--------------------------------- Check User Datas ---------------------------------")
     users = redmine.user.all()
 
-    #/* 対象プロジェクトからユーザー情報を取得 */
+    #/* 全ユーザー情報を取得 */
     for user in users:
 #       print(dir(user))
         user.name = user.lastname + ' ' + user.firstname
-        get_user_data(redmine, user)
+        get_user_data(redmine, user.id, user.name)
+
+
+    #/* 全グループ情報も取得 */
+    groups = redmine.group.all()
+    for group in groups:
+        print("[%d]%s as a Group" % (group.id, group.name))
+        print(dir(group))
+        print(dir(group.memberships))
+        get_user_data(redmine, group.id, group.name)
 
     return
 
@@ -1314,13 +1428,55 @@ def output_issue_list_line(ws, row, issue_data):
 #/*****************************************************************************/
 def output_all_issues_list(ws):
     global g_issue_list
+    global g_opt_grouping
 
     print("--------------------------------- Output Issue List ---------------------------------")
     output_issue_list_format_line(ws)
     row = 3
     for issue_data in g_issue_list:
         offset = output_issue_list_line(ws, row, issue_data)
+        if (g_opt_grouping):
+            ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=True)
+        else:
+            ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=False)
         row += (1 + offset)
+
+    return
+
+
+#/*****************************************************************************/
+#/* ユーザーごとの作業時間出力                                                */
+#/*****************************************************************************/
+def output_user_time(ws):
+    global g_time_entry_list
+    global g_statistics_data
+    global g_user_list
+    global g_first_time_entry_date
+    global g_base_day
+
+    #/* 最初のTimeEntryと指定された開始日を比較して、実際に出力する開始日を決定する */
+    if (g_first_time_entry_date.timestamp < g_statistics_data.start):
+        start_day = g_statistics_data.start
+    else:
+        start_day = g_first_time_entry_date.timestamp
+
+    #/* 今日の日付と指定された終了日を比較して、実際に出力する終了日を決定する */
+    if (g_base_day > g_statistics_data.end):
+        end_day = g_statistics_data.end
+    else:
+        end_day = g_base_day
+
+    print("--------------------------------- Output User Time Entry [%s --- %s] ---------------------------------" % (start_day, end_day))
+
+
+    row = 1
+    col = 1
+    if (g_statistics_data.unit == 'week'):
+        ws.cell(row, col).value = '週単位（%s ～ %s）' % (start_day, end_day)
+    elif (g_statistics_data.unit == 'month'):
+        ws.cell(row, col).value = '月単位（%s ～ %s）' % (start_day, end_day)
+    elif (g_statistics_data.unit == 'day'):
+        ws.cell(row, col).value = '日単位（%s ～ %s）' % (start_day, end_day)
 
     return
 
@@ -1391,10 +1547,16 @@ def output_settings(ws):
     global g_opt_list_attrs
     global g_opt_journal_filters
     global g_opt_full_issues
+    global g_base_day
+    global g_statistics_data
 
     print("--------------------------------- Output Settings ---------------------------------")
 
     row = 1
+    ws.cell(row, 1).value = '実行日'
+    ws.cell(row, 2).value = g_base_day
+    row += 1
+
     ws.cell(row, 1).value = 'Redmineバージョン指定'
     if (g_opt_redmine_version != None):
         ws.cell(row, 2).value = g_opt_redmine_version
@@ -1448,6 +1610,18 @@ def output_settings(ws):
         ws.cell(row, col).value = "YES"
     else:
         ws.cell(row, col).value = "NO"
+    row += 1
+
+    ws.cell(row, 1).value = '分析単位'
+    col = 2
+    ws.cell(row, col).value = g_statistics_data.unit
+    row += 1
+
+    ws.cell(row, 1).value = '分析期間'
+    col = 2
+    ws.cell(row, col).value = g_statistics_data.start
+    col += 1
+    ws.cell(row, col).value = g_statistics_data.end
     row += 1
 
     return
@@ -1572,9 +1746,32 @@ def output_datas():
     output_all_time_entries(wb.create_sheet(title = "作業時間一覧"))
     output_id_list(wb.create_sheet(title = "ID一覧"))
     output_settings(wb.create_sheet(title = "設定値"))
+    output_user_time(wb.create_sheet(title = "ユーザー作業時間"))
     wb.save(g_opt_out_file)
     return
 
+
+#/*****************************************************************************/
+#/* 作業時間の読み出し、登録                                                  */
+#/*****************************************************************************/
+def read_time_entries(time_entries, user_data):
+    global g_latest_time_entry_ts
+    global g_first_time_entry_date
+
+    for time_entry in time_entries:
+        te = find_time_entry(time_entry.id)
+        if (te == None):
+            te = cTimeEntryData(time_entry.id)
+            user_data.time_entries.append(te)
+
+        te.set_data_by_time_entry(time_entry)
+        g_latest_time_entry_ts.latter_timestamp(te.updated_on)
+
+        print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
+        g_first_time_entry_date.former_timestamp(te.spent_on)
+        append_wo_duplicate(g_time_entry_list, te)
+
+    return
 
 
 #/*****************************************************************************/
@@ -1585,7 +1782,7 @@ def time_entry_check(redmine, is_full_check):
     global g_target_project_list
     global g_user_list
     global g_opt_include_sub_prj
-    global g_time_entries_ts
+    global g_latest_time_entry_ts
 
     if (g_opt_include_sub_prj == 0):
         l_subproject = '!*'
@@ -1597,23 +1794,15 @@ def time_entry_check(redmine, is_full_check):
         for user_data in g_user_list:
             for project_data in g_target_project_list:
                 time_entries = redmine.time_entry.filter(project_id = project_data.id, subproject_id = l_subproject, user_id = user_data.id)
-                for time_entry in time_entries:
-                    te = cTimeEntryData(time_entry.id)
-                    te.set_data_by_time_entry(time_entry)
-                    g_time_entries_ts.created_timestamp(te.created_on)
-                    g_time_entries_ts.updated_timestamp(te.updated_on)
-
-                    print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
-                    user_data.time_entries.append(te)
-                    g_time_entry_list.append(te)
+                read_time_entries(time_entries, user_data)
     else:
-        last_created = g_time_entries_ts.created_on.date()
-        last_updated = g_time_entries_ts.updated_on.date()
-        created_option = '>=%s' % last_created
-        updated_option = '>=%s' % last_updated
+        last_updated = g_latest_time_entry_ts.timestamp.date()
 
-        print("--------------------------------- Time Entries Check Created onwards %s ---------------------------------" % (last_created))
-        print("--------------------------------- Time Entries Check Updated onwards %s ---------------------------------" % (last_updated))
+        print("--------------------------------- Time Entries Check onwards %s ---------------------------------" % (last_updated))
+        for user_data in g_user_list:
+            for project_data in g_target_project_list:
+                time_entries = redmine.time_entry.filter(project_id = project_data.id, subproject_id = l_subproject, user_id = user_data.id, from_date = last_updated)      #/* Time Entry は from_dateでフィルタする */
+                read_time_entries(time_entries, user_data)
 
     return
 
@@ -1655,36 +1844,17 @@ def full_issue_check(redmine):
 def issue_check(redmine):
     global g_filter_limit
     global g_opt_include_sub_prj
-    global g_issues_ts
+    global g_latest_issues_update_ts
 
-    last_created = g_issues_ts.created_on.date()
-    last_updated = g_issues_ts.updated_on.date()
+    last_updated = g_latest_issues_update_ts.timestamp.date()
     print("--------------------------------- Created / Updated Issue Check ---------------------------------")
-#   print("  last created : %s" % last_created)
-#   print("  last created : %s" % last_updated)
-
     for project_data in g_target_project_list:
         if (g_opt_include_sub_prj == 0):
             l_subproject = '!*'
         else:
             l_subproject = '*'
 
-        created_option = '>=%s' % last_created
         updated_option = '>=%s' % last_updated
-        filter_offset = 0
-        while(1):
-            issues = redmine.issue.filter(project_id = project_data.id, subproject_id = l_subproject, status_id = '*', limit = g_filter_limit, offset = filter_offset, created_on = created_option)
-            if (len(issues) == 0):
-                break
-
-            print("--------------------------------- ProjectID : %d, Created onwards %s Filter Offset %d ---------------------------------" % (project_data.id, last_created, filter_offset))
-            for issue in issues:
-                issue_data = get_issue_data(issue)
-                issue_data.read_issue_data(issue)
-                issue_data.print_issue_data()
-
-            filter_offset += g_filter_limit
-
         filter_offset = 0
         while(1):
             issues = redmine.issue.filter(project_id = project_data.id, subproject_id = l_subproject, status_id = '*', limit = g_filter_limit, offset = filter_offset, updated_on = updated_option)
@@ -1752,7 +1922,7 @@ def read_journal_lines(ws, row, issue_data, j_col, d_col):
 #/* チケット属性読み出し                                                    */
 #/*****************************************************************************/
 def read_attr_value(issue_data, attr, value):
-    global g_issues_ts
+    global g_latest_issues_update_ts
 
     if (result := re_cf_data.match(attr)):
         #/* カスタムフィールドの場合 */
@@ -1820,10 +1990,9 @@ def read_attr_value(issue_data, attr, value):
             setattr(issue_data, attr, value)
     elif (attr == 'created_on'):
         setattr(issue_data, attr, value)
-        g_issues_ts.created_timestamp(value)
     elif (attr == 'updated_on'):
         setattr(issue_data, attr, value)
-        g_issues_ts.updated_timestamp(value)
+        g_latest_issues_update_ts.latter_timestamp(value)
     elif (attr != ''):
         setattr(issue_data, attr, value)
 
@@ -1836,7 +2005,7 @@ def read_attr_value(issue_data, attr, value):
 #/*****************************************************************************/
 def read_time_entry_list(ws):
     global g_time_entry_list
-    global g_time_entries_ts
+    global g_latest_time_entry_ts
     print("--------------------------------- Read Time Entry List! ---------------------------------")
 
     row = 1
@@ -1856,7 +2025,6 @@ def read_time_entry_list(ws):
 
         #/* 作成日時(datetime) */
         te_created_on = get_cell_value_str(ws, row, col, 0)
-        g_time_entries_ts.created_timestamp(te_created_on)
         col += 1
 
         #/* 作業日（date） */
@@ -1886,7 +2054,7 @@ def read_time_entry_list(ws):
 
         #/* 更新日 */
         te_updated_on = get_cell_value_str(ws, row, col, 0)
-        g_time_entries_ts.updated_timestamp(te_updated_on)
+        g_latest_time_entry_ts.latter_timestamp(te_updated_on)
         col += 1
 
         te = cTimeEntryData(te_id)
@@ -1901,6 +2069,7 @@ def read_time_entry_list(ws):
         print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
         te_user.time_entries.append(te)
         g_time_entry_list.append(te)
+        g_first_time_entry_date.former_timestamp(te.spent_on)
 
         row += 1
 
@@ -2023,6 +2192,16 @@ def main():
         read_in_file()
         time_entry_check(redmine, 0)
         issue_check(redmine)
+
+#    for issue_data in g_issue_list:
+#        print("---- issue[%d] ----" % (issue_data.id))
+#        for offset in range(-5, 2):
+#            monday = get_weeks_monday(g_base_day, offset)
+#            user_data = issue_data.get_attr_at_some_date('assigned_to', monday)
+#            if (user_data != None):
+#                print("issue[%d] was assigned to %s @ %s" % (issue_data.id, get_key_value_str(user_data.id, user_data.name), monday))
+#            else:
+#                print("issue[%d] was assigned to %s @ %s" % (issue_data.id, '-', monday))
 
     output_datas()
 

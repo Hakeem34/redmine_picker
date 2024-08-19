@@ -1,6 +1,7 @@
 #
 URL             : http://localhost:3000/
-#API KEY         : XXXXXXXXXXXXXXXXXXXXXX
+#API KEY        : XXXXXXXXXXXXXXXXXXXXXX
+REDMINE VERSION : 5.0.7
 
 TARGET PROJECT  : TestProject
 TARGET PROJECT  : Redmineスクリプト
@@ -10,9 +11,25 @@ IN  FILE NAME   : redmine_result.xlsx
 OUT FILE NAME   : redmine_result_%ymd.xlsx
 
 
-#/******************************/
-#/* チケット一覧に出力する情報 */
-#/******************************/
+#/****************************************************/
+#/* プロジェクト分析に関する設定                     */
+#/****************************************************/
+#STATISTICS UNIT : day
+STATISTICS UNIT  : week
+#STATISTICS UNIT : month
+STATISTICS START : 1900/01/01
+STATISTICS END   : 2100/01/01
+
+
+#/****************************************************/
+#/* チケット一覧の更新情報をグループ化する（YES/NO） */
+#/****************************************************/
+JOURNAL GROUPING : 0
+
+
+#/****************************************************/
+#/* チケット一覧に出力する情報                       */
+#/****************************************************/
 ISSUE LIST ATTR : id
 ISSUE LIST ATTR : project
 ISSUE LIST ATTR : parent
@@ -46,12 +63,17 @@ ISSUE LIST CF   : 12
 ISSUE LIST ATTR : journals
 
 
-#/******************************/
-#/* 更新情報のフィルタ         */
-#/******************************/
+#/****************************************************/
+#/* 更新情報のフィルタ                               */
+#/****************************************************/
+JOURNAL FILTER  : notes
 JOURNAL FILTER  : assigned_to_id
 JOURNAL FILTER  : status_id
 JOURNAL FILTER  : done_ratio
 JOURNAL FILTER  : due_date
+JOURNAL FILTER  : priority_id
+JOURNAL FILTER  : fixed_version_id
+JOURNAL FILTER  : tracker_id
+JOURNAL FILTER  : project_id
 JOURNAL FILTER  : 3
-
+JOURNAL FILTER  : 8
