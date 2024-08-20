@@ -240,9 +240,9 @@ class cDetailData:
         elif (self.name == 'status_id'):
             value = get_key_value_str(int(value), get_issue_status_name(int(value)))
         elif (self.name == 'tracker_id'):
-            value = get_key_value_str(int(value), g_tracker_id_dic[int(value)])
+            value = get_key_value_str(int(value), g_tracker_id_dic.get(int(value), '不明なトラッカー'))
         elif (self.name == 'priority_id'):
-            value = get_key_value_str(int(value), g_enum_priority_dic[int(value)])
+            value = get_key_value_str(int(value), g_enum_priority_dic.get(int(value)), '不明なプライオリティ')
         elif (self.name == 'fixed_version_id'):
             value = get_version_str(int(value))
         elif (self.name == 'done_ratio') or (self.name == 'parent'):
@@ -250,7 +250,7 @@ class cDetailData:
         elif (self.name == 'total_spent_hours'):
             value = float(value)
         elif (self.name == 'project_id'):
-            value = get_key_value_str(int(value), g_project_id_dic[int(value)]) 
+            value = get_key_value_str(int(value), g_project_id_dic.get(int(value)), '不明なプロジェクト') 
 
         return value
 
