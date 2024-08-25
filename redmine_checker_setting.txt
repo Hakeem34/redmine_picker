@@ -4,6 +4,7 @@ URL             : http://localhost:3000/
 REDMINE VERSION : 5.0.7
 
 TARGET PROJECT  : TestProject
+#TARGET PROJECT  : TestSubProject
 TARGET PROJECT  : Redmineスクリプト
 INCLUDE SUB PRJ : 1
 
@@ -14,9 +15,9 @@ OUT FILE NAME   : redmine_result_%ymd.xlsx
 #/****************************************************/
 #/* プロジェクト分析に関する設定                     */
 #/****************************************************/
-#STATISTICS UNIT : day
-STATISTICS UNIT  : week
-#STATISTICS UNIT : month
+#STATISTICS UNIT  : day
+#STATISTICS UNIT  : week
+STATISTICS UNIT  : month
 STATISTICS START : 1900/01/01
 STATISTICS END   : 2100/01/01
 

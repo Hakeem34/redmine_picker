@@ -7,6 +7,8 @@ import time
 import datetime
 import shutil
 import openpyxl
+import unicodedata
+
 
 from pathlib  import Path
 from redminelib import Redmine
@@ -74,6 +76,18 @@ re_cf_data          = re.compile(r"^cf_([0-9]+)")
 
 
 #/*****************************************************************************/
+#/* 全角文字の数をカウント                                                    */
+#/*****************************************************************************/
+def get_full_width_count_in_text(text):
+    count = 0
+    for character in text:
+        if unicodedata.east_asian_width(character) in 'FWA':
+            count += 1
+
+    return count
+
+
+#/*****************************************************************************/
 #/* 分析処理クラス                                                            */
 #/*****************************************************************************/
 class cStatisticsData:
@@ -82,6 +96,16 @@ class cStatisticsData:
         self.start = datetime.date(1900, 1, 1)
         self.end   = datetime.date(2100, 1, 1)
         return
+
+    def get_next_unit_date(self, some_date):
+        if (self.unit == 'month'):
+            output_date = get_month_start_day(some_date, 1)
+        elif (self.unit == 'day'):
+            output_date = some_date + datetime.timedelta(days=1)
+        else:
+            output_date = some_date + datetime.timedelta(days=7)
+
+        return output_date
 
 g_statistics_data = cStatisticsData()
 
@@ -126,10 +150,12 @@ class cVersionData:
 #/*****************************************************************************/
 class cProjectData:
     def __init__(self, project):
-        self.id         = project.id
-        self.name       = project.name
-        self.created_on = project.created_on
-        self.versions   = []
+        self.id           = project.id
+        self.name         = project.name
+        self.created_on   = project.created_on
+        self.versions     = []
+        self.active_users = []
+        self.included     = 0                   #/* サブプロジェクト込みで指定された場合1とする */
         return
 
 
@@ -226,7 +252,7 @@ class cDetailData:
 
         #/* カスタムフィールドの場合、nameにはカスタムフィールドのIDがstrで入っているので、カスタムフィールドの名前に変換する */
         if (self.property == 'cf'):
-            name = "[%s]%s" % (name, get_custom_fieled_name(int(name)))
+            name = "[%s]%s" % (name, get_custom_field_name(int(name)))
 
         return name
 
@@ -242,7 +268,7 @@ class cDetailData:
         elif (self.name == 'tracker_id'):
             value = get_key_value_str(int(value), g_tracker_id_dic.get(int(value), '不明なトラッカー'))
         elif (self.name == 'priority_id'):
-            value = get_key_value_str(int(value), g_enum_priority_dic.get(int(value)), '不明なプライオリティ')
+            value = get_key_value_str(int(value), g_enum_priority_dic.get(int(value), '不明なプライオリティ'))
         elif (self.name == 'fixed_version_id'):
             value = get_version_str(int(value))
         elif (self.name == 'done_ratio') or (self.name == 'parent'):
@@ -250,7 +276,7 @@ class cDetailData:
         elif (self.name == 'total_spent_hours'):
             value = float(value)
         elif (self.name == 'project_id'):
-            value = get_key_value_str(int(value), g_project_id_dic.get(int(value)), '不明なプロジェクト') 
+            value = get_key_value_str(int(value), g_project_id_dic.get(int(value), '不明なプロジェクト'))
 
         return value
 
@@ -282,13 +308,13 @@ class cDetailData:
         return value
 
     #/*****************************************************************************/
-    #/* 表示データ変換(Custom Fieled)                                            */
+    #/* 表示データ変換(Custom Field)                                              */
     #/*****************************************************************************/
     def get_disp_value_cf(self, value):
         id         = int(self.name)
-        multiple   = get_custom_fieled_multiple(id)
-        format     = get_custom_fieled_format(id)
-        dictionary = get_custom_fieled_dictionary(id)
+        multiple   = get_custom_field_multiple(id)
+        format     = get_custom_field_format(id)
+        dictionary = get_custom_field_dictionary(id)
 
         if (format == 'user'):
             user_data = get_user_data_by_id(int(value))
@@ -301,12 +327,12 @@ class cDetailData:
         return value
 
     #/*****************************************************************************/
-    #/* 表示データから実データへの変換(Custom Fieled)                             */
+    #/* 表示データから実データへの変換(Custom Field)                              */
     #/*****************************************************************************/
     def set_cf_from_disp_value(self, text):
         value = text
         id         = int(self.name)
-        format     = get_custom_fieled_format(id)
+        format     = get_custom_field_format(id)
         if (format == 'user'):
             if (value == None) or (value == "") or (value == "-"):
                 return None
@@ -374,6 +400,7 @@ class cUserData:
         self.id           = id
         self.name         = name
         self.time_entries = []
+        self.hours_sum    = 0
         return
 
 NONE_USER = cUserData(0, "-")
@@ -382,14 +409,14 @@ NONE_USER = cUserData(0, "-")
 #/*****************************************************************************/
 #/* カスタムフィールドデータクラス                                            */
 #/*****************************************************************************/
-class cCustomFieledData:
+class cCustomFieldData:
     def __init__(self, cf_id, cf_name, cf_value):
         self.id    = cf_id
         self.name  = cf_name
 
-        format     = get_custom_fieled_format(cf_id)
-        multiple   = get_custom_fieled_multiple(cf_id)
-        dictionary = get_custom_fieled_dictionary(self.id)
+        format     = get_custom_field_format(cf_id)
+        multiple   = get_custom_field_multiple(cf_id)
+        dictionary = get_custom_field_dictionary(self.id)
 
         if (format == 'user'):
             #/* ユーザーIDの場合は、ユーザー情報（cUserData）として情報を保持する。複数可の場合はリスト化する */
@@ -438,8 +465,8 @@ class cCustomFieledData:
     #/* 表示データ変換                                                            */
     #/*****************************************************************************/
     def get_disp_value(self):
-        format     = get_custom_fieled_format(self.id)
-        multiple   = get_custom_fieled_multiple(self.id)
+        format     = get_custom_field_format(self.id)
+        multiple   = get_custom_field_multiple(self.id)
 
         if (format == "user"):
             if (multiple):
@@ -461,7 +488,7 @@ class cCustomFieledData:
 #/*****************************************************************************/
 #/* カスタムフィールドの型情報クラス                                          */
 #/*****************************************************************************/
-class cCustomFieledType:
+class cCustomFieldType:
     def __init__(self, cf):
         self.id         = cf.id
         self.name       = cf.name
@@ -517,6 +544,18 @@ class cIssueData:
         self.time_entries      = []
         self.custom_fields     = []
         return
+
+    #/*****************************************************************************/
+    #/* 属性値の取得                                                              */
+    #/*****************************************************************************/
+    def get_attr_value(self, attribute):
+        if (attribute.isdigit()):
+            for cf in self.custom_fields:
+                if (cf.id == int(attribute)):
+                    return cf
+        else:
+            return getattr(self, attribute)
+
 
     #/*****************************************************************************/
     #/* 表示用の属性値取得                                                        */
@@ -585,7 +624,7 @@ class cIssueData:
         self.custom_fields = []
         if (hasattr(issue, 'custom_fields')):
             for cf in issue.custom_fields:
-                cf_data = cCustomFieledData(cf.id, cf.name, cf.value)
+                cf_data = cCustomFieldData(cf.id, cf.name, cf.value)
                 self.custom_fields.append(cf_data)
                 if (str(cf_data.id) in g_opt_list_attrs):
                     pass
@@ -641,7 +680,7 @@ class cIssueData:
         else:
             #/* attrの場合、nameの変換が必要 */
             check_prop = 'attr'
-            if (attr == 'assigned_to') or (attr == 'status') or (attr == 'fixed_version') or (attr == 'tracker') or (attr == 'priority'):
+            if (attr == 'assigned_to') or (attr == 'status') or (attr == 'fixed_version') or (attr == 'tracker') or (attr == 'priority') or (attr == 'project'):
                 check_name = attr + '_id'
             else:
                 check_name = attr
@@ -649,6 +688,7 @@ class cIssueData:
         for journal in self.journals:
             created_on_date = journal.created_on.date()
             if (created_on_date < last_journal):
+                print("Invalid Journal Sequence! last:%s, next:%s" % (last_journal, created_on_date), file=sys.stderr)
                 print("Invalid Journal Sequence! last:%s, next:%s" % (last_journal, created_on_date))
                 exit(-1)
 
@@ -664,33 +704,44 @@ class cIssueData:
     #/********************************************************************************/
     #/* チケット属性の日にち指定取得(特定属性のみサポート、複数可のCFはサポート不可) */
     #/********************************************************************************/
-    def get_attr_at_some_date(self, attr, some_date):
+    def get_attr_at_some_date(self, attr, some_date, empty_value):
+        #/* 指定された日がチケット作成よりも前の日だった場合、指定されたempty_valueを返す */
         if (some_date < self.created_on.date()):
-            return None
+            return empty_value
 
         last_journal = datetime.date(1900, 1, 1)
 
+        detail = self.find_detail_after_some_day(attr, some_date)
+        if (detail == None):
+            #/* 更新データが見つからない場合は、現在値を返す（当時の値がそのまま現在の値になっている） */
+            return self.get_attr_value(attr)
+
+        if (detail.old_val == None) or (detail.old_val == ''):
+            #/* old値が空だった場合は、指定されたempty_valueを返す */
+            return empty_value
+
         if (attr == 'assigned_to'):
-            detail = self.find_detail_after_some_day(attr, some_date)
-            if (detail == None):
-                #/* 更新データが見つからない場合は、当時の値がそのまま現在の値になっている */
-                return self.assigned_to
-            else:
-                #/* 更新データが見つかった場合は、old値を返す */
-                if (detail.old_val == None) or (detail.old_val == ''):
-                    old_user = NONE_USER
-                else:
-                    old_user = get_user_data_by_id(int(detail.old_val))
-
-                return old_user
-
+            #/* 更新データが見つかった場合は、old値を返す */
+            return get_user_data_by_id(int(detail.old_val))
         elif (attr == 'status'):
-            current = self.status
-            pass
+            return get_issue_status_name(int(detail.old_val))
         elif (attr == 'due_date'):
-            pass
+            return detail.old_val
+        elif (attr == 'done_ratio'):
+            return int(detail.old_val)
+        elif (attr == 'fixed_version'):
+            return get_version_str(int(detail.old_val))
+        elif (attr == 'priority'):
+            return g_enum_priority_dic.get(int(detail.old_val), '不明なプライオリティ')
+        elif (attr == 'tracker'):
+            return g_tracker_id_dic.get(int(detail.old_val), '不明なトラッカー')
+        elif (attr == 'project'):
+            return g_project_id_dic.get(int(detail.old_val), '不明なプロジェクト')
+        elif (attr.isdigit()):
+            cf_id = int(attr)
+            return cCustomFieldData(cf_id, get_custom_field_name(cf_id), detail.old_val)
         else:
-            pass
+            print("サポートされないattribute（%s）を指定されました" % (attr))
 
         return
 
@@ -869,6 +920,19 @@ def getattr_ex(target, attr, sub_attr, default):
 
 
 #/*****************************************************************************/
+#/* プロジェクト情報の検索                                                    */
+#/*****************************************************************************/
+def get_project_data_by_name(project_name):
+    global g_target_project_list
+
+    for project_data in g_target_project_list:
+        if (project_data.name == project_name):
+            return project_data
+
+    return None
+
+
+#/*****************************************************************************/
 #/* チケット情報の読み出し                                                    */
 #/*****************************************************************************/
 def get_issue_data(issue):
@@ -902,7 +966,7 @@ def get_issue_data_by_id(issue_id):
 #/*****************************************************************************/
 #/* カスタムフィールド情報の取得                                              */
 #/*****************************************************************************/
-def get_custom_fieled_type(id):
+def get_custom_field_type(id):
     global g_cf_type_list
 
     for cf_type in g_cf_type_list:
@@ -915,10 +979,10 @@ def get_custom_fieled_type(id):
 #/*****************************************************************************/
 #/* カスタムフィールドのフォーマット情報の取得                                */
 #/*****************************************************************************/
-def get_custom_fieled_format(id):
+def get_custom_field_format(id):
     global g_cf_type_list
 
-    cf_type = get_custom_fieled_type(id)
+    cf_type = get_custom_field_type(id)
 
     if (cf_type != None):
         return cf_type.format
@@ -929,10 +993,10 @@ def get_custom_fieled_format(id):
 #/*****************************************************************************/
 #/* カスタムフィールドの名称取得                                              */
 #/*****************************************************************************/
-def get_custom_fieled_name(id):
+def get_custom_field_name(id):
     global g_cf_type_list
 
-    cf_type = get_custom_fieled_type(id)
+    cf_type = get_custom_field_type(id)
 
     if (cf_type != None):
         return cf_type.name
@@ -943,10 +1007,10 @@ def get_custom_fieled_name(id):
 #/*****************************************************************************/
 #/* カスタムフィールドのフォーマット情報の取得                                */
 #/*****************************************************************************/
-def get_custom_fieled_dictionary(id):
+def get_custom_field_dictionary(id):
     global g_cf_type_list
 
-    cf_type = get_custom_fieled_type(id)
+    cf_type = get_custom_field_type(id)
 
     if (cf_type != None):
         return cf_type.dictionary
@@ -957,10 +1021,10 @@ def get_custom_fieled_dictionary(id):
 #/*****************************************************************************/
 #/* カスタムフィールドが複数選択可能かどうか                                  */
 #/*****************************************************************************/
-def get_custom_fieled_multiple(id):
+def get_custom_field_multiple(id):
     global g_cf_type_list
 
-    cf_type = get_custom_fieled_type(id)
+    cf_type = get_custom_field_type(id)
 
     if (cf_type != None):
         return cf_type.multiple
@@ -1210,12 +1274,35 @@ def get_version_str(version_id):
 
 
 #/*****************************************************************************/
+#/* プロジェクト情報の登録                                                    */
+#/*****************************************************************************/
+def add_project_data(project, included):
+    global g_target_project_list
+
+    project_data = cProjectData(project)
+    for version in project.versions:
+        print("  Version ID[%d] : %s" % (version.id, version.name))
+        version_data = get_version_info(version)
+        project_data.versions.append(version_data)
+
+    if (get_project_data_by_name(project_data.name) != None):
+        print("プロジェクトの指定が重複しています！ : %s" % (project_data.name), file=sys.stderr)
+        print("プロジェクトの指定が重複しています！ : %s" % (project_data.name))
+        exit(-1)
+
+    project_data.included = included
+    g_target_project_list.append(project_data)
+    return
+
+
+#/*****************************************************************************/
 #/* プロジェクト情報の取得                                                    */
 #/*****************************************************************************/
 def check_project_info(redmine):
     global g_opt_target_projects
     global g_target_project_list
     global g_project_id_dic
+    global g_opt_include_sub_prj
 
     print("--------------------------------- Check Project Datas ---------------------------------")
     projects = redmine.project.all()
@@ -1225,14 +1312,18 @@ def check_project_info(redmine):
         g_project_id_dic[project.id] = project.name
         for target in g_opt_target_projects:
             if (target == project.name):
-                project_data = cProjectData(project)
                 print("ID[%d] : %s" % (project.id, target))
-                for version in project.versions:
-                    print("Version ID[%d] : %s" % (version.id, version.name))
-                    version_data = get_version_info(version)
-                    project_data.versions.append(version_data)
+                add_project_data(project, 0)
+                break
 
-                g_target_project_list.append(project_data)
+        #/* ここまで来ている時点で対象に指定されていないプロジェクト */
+        if (g_opt_include_sub_prj == 1):
+            parent_name = getattr_ex(project, 'parent', 'name', "")
+            if (parent_name != ""):
+                print("ID[%d]%s has parent [%s]" % (project.id, project.name, parent_name))
+                if (get_project_data_by_name(parent_name) != None):
+                    #/* 親プロジェクトが登録されていたら、子プロジェクトも登録する */
+                    add_project_data(project, 1)
 
     return
 
@@ -1254,10 +1345,10 @@ def check_user_info(redmine):
     #/* 全グループ情報も取得 */
     groups = redmine.group.all()
     for group in groups:
-        print("[%d]%s as a Group" % (group.id, group.name))
-        print(dir(group))
-        print(dir(group.memberships))
+#       print(dir(group))
+#       print(dir(group.memberships))
         get_user_data(redmine, group.id, group.name)
+        print("[%d]%s as a Group" % (group.id, group.name))
 
     return
 
@@ -1271,7 +1362,7 @@ def check_custom_fields(redmine):
     print("--------------------------------- Check Custom Fields ---------------------------------")
     fields = redmine.custom_field.all()
     for cf in fields:
-        cf_type = cCustomFieledType(cf)
+        cf_type = cCustomFieldType(cf)
         if (cf_type.type == "issue"):
             print("  [%d][%s]:%s" % (cf_type.id, cf_type.name, cf_type.format))
             g_cf_type_list.append(cf_type)
@@ -1375,7 +1466,7 @@ def output_issue_list_format_line(ws):
                 ws.cell(row + 1, col + 7).value = '更新後'
         else:
             ws.cell(row,     col).value = 'cf_' + item
-            ws.cell(row + 1, col).value = get_custom_fieled_name(int(item))
+            ws.cell(row + 1, col).value = get_custom_field_name(int(item))
         col += 1
 
     return
@@ -1448,6 +1539,7 @@ def output_all_issues_list(ws):
 #/* ユーザーごとの作業時間出力                                                */
 #/*****************************************************************************/
 def output_user_time(ws):
+    global g_target_project_list
     global g_time_entry_list
     global g_statistics_data
     global g_user_list
@@ -1468,15 +1560,81 @@ def output_user_time(ws):
 
     print("--------------------------------- Output User Time Entry [%s --- %s] ---------------------------------" % (start_day, end_day))
 
+    active_user_list = []
+    for project_data in g_target_project_list:
+        active_user_list.extend(project_data.active_users)
+        for user_data in project_data.active_users:
+            print("Active for [%s]:[%s]" % (project_data.name, user_data.name))
+
+    active_user_set = set(active_user_list)
 
     row = 1
     col = 1
     if (g_statistics_data.unit == 'week'):
         ws.cell(row, col).value = '週単位（%s ～ %s）' % (start_day, end_day)
+        start_day = get_weeks_monday(start_day, 0)
+        end_day   = get_weeks_monday(end_day, 0)
     elif (g_statistics_data.unit == 'month'):
         ws.cell(row, col).value = '月単位（%s ～ %s）' % (start_day, end_day)
+        start_day = start_day.replace(day = 1)
+        end_day   = end_day.replace(day = 1)
     elif (g_statistics_data.unit == 'day'):
         ws.cell(row, col).value = '日単位（%s ～ %s）' % (start_day, end_day)
+    else:
+        print("Invalid statistics data unit! : %s" % g_statistics_data.unit)
+        return
+
+    output_day = start_day
+
+    row = 3
+    col = 1
+    for user_data in active_user_set:
+        ws.cell(row, col).value = user_data.name
+        user_data.hours_sum = 0
+        row += 1
+
+    ws.cell(row, col).value = '合計'
+
+    col = 2
+    while (output_day <= end_day):
+        row = 2
+        next_unit = g_statistics_data.get_next_unit_date(output_day)
+        print("output : %s - %s" % (output_day, next_unit))
+        ws.cell(row, col).value = output_day
+
+        total_hours_in_unit = 0
+        for user_data in active_user_set:
+            row += 1
+            time_spent_in_unit = 0
+            for time_entry in user_data.time_entries:
+                if (output_day <= time_entry.spent_on) and (time_entry.spent_on < next_unit):
+                    time_spent_in_unit += time_entry.hours
+
+            ws.cell(row, col).value = time_spent_in_unit
+            total_hours_in_unit += time_spent_in_unit
+            user_data.hours_sum += time_spent_in_unit
+
+        row += 1
+        ws.cell(row, col).value = total_hours_in_unit            #/* unit合計の出力 */
+
+        output_day = next_unit
+        col += 1
+
+    #/* 個人合計の出力 */
+    row = 2
+    ws.cell(row, col).value = '合計'
+
+    total_hours_in_unit = 0
+    for user_data in active_user_set:
+        row += 1
+        ws.cell(row, col).value = user_data.hours_sum
+        total_hours_in_unit += user_data.hours_sum
+
+    row += 1
+    ws.cell(row, col).value = total_hours_in_unit
+
+    output_day = next_unit
+    col += 1
 
     return
 
@@ -1754,7 +1912,7 @@ def output_datas():
 #/*****************************************************************************/
 #/* 作業時間の読み出し、登録                                                  */
 #/*****************************************************************************/
-def read_time_entries(time_entries, user_data):
+def read_time_entries(time_entries, user_data, project_data):
     global g_latest_time_entry_ts
     global g_first_time_entry_date
 
@@ -1770,6 +1928,10 @@ def read_time_entries(time_entries, user_data):
         print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
         g_first_time_entry_date.former_timestamp(te.spent_on)
         append_wo_duplicate(g_time_entry_list, te)
+
+    if (len(time_entries) > 0):
+        print("Project[%s] Active[%s]" % ((project_data.name, user_data.name)))
+        append_wo_duplicate(project_data.active_users, user_data)
 
     return
 
@@ -1793,16 +1955,21 @@ def time_entry_check(redmine, is_full_check):
         print("--------------------------------- Time Entries Check Full ---------------------------------")
         for user_data in g_user_list:
             for project_data in g_target_project_list:
+                if (project_data.included):
+                    continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
+
                 time_entries = redmine.time_entry.filter(project_id = project_data.id, subproject_id = l_subproject, user_id = user_data.id)
-                read_time_entries(time_entries, user_data)
+                read_time_entries(time_entries, user_data, project_data)
     else:
         last_updated = g_latest_time_entry_ts.timestamp.date()
 
         print("--------------------------------- Time Entries Check onwards %s ---------------------------------" % (last_updated))
         for user_data in g_user_list:
             for project_data in g_target_project_list:
+                if (project_data.included):
+                    continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
                 time_entries = redmine.time_entry.filter(project_id = project_data.id, subproject_id = l_subproject, user_id = user_data.id, from_date = last_updated)      #/* Time Entry は from_dateでフィルタする */
-                read_time_entries(time_entries, user_data)
+                read_time_entries(time_entries, user_data, project_data)
 
     return
 
@@ -1816,6 +1983,9 @@ def full_issue_check(redmine):
 
     print("--------------------------------- Full Issue Check ---------------------------------")
     for project_data in g_target_project_list:
+        if (project_data.included):
+            continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
+
         if (g_opt_include_sub_prj == 0):
             l_subproject = '!*'
         else:
@@ -1849,6 +2019,9 @@ def issue_check(redmine):
     last_updated = g_latest_issues_update_ts.timestamp.date()
     print("--------------------------------- Created / Updated Issue Check ---------------------------------")
     for project_data in g_target_project_list:
+        if (project_data.included):
+            continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
+
         if (g_opt_include_sub_prj == 0):
             l_subproject = '!*'
         else:
@@ -1930,9 +2103,9 @@ def read_attr_value(issue_data, attr, value):
             return
 
         cf_id    = int(result.group(1))
-        cf_name  = get_custom_fieled_name(cf_id)
-        multiple = get_custom_fieled_multiple(cf_id)
-        format   = get_custom_fieled_format(cf_id)
+        cf_name  = get_custom_field_name(cf_id)
+        multiple = get_custom_field_multiple(cf_id)
+        format   = get_custom_field_format(cf_id)
 
         if (format == 'user') or (format == 'version') or (format == 'enumeration'):
             #/* カスタムフィールドでユーザー／バージョン／enum情報の場合 */
@@ -1963,7 +2136,7 @@ def read_attr_value(issue_data, attr, value):
         else:
             cf_val = value
 
-        cf_data = cCustomFieledData(cf_id, cf_name, cf_val)
+        cf_data = cCustomFieldData(cf_id, cf_name, cf_val)
         issue_data.custom_fields.append(cf_data)
 
     elif (attr == 'author') or (attr == 'assigned_to'):
@@ -2069,6 +2242,11 @@ def read_time_entry_list(ws):
         print("  [%s][%s] %s, %s h for #%s (%s), updated : %s" % (te.id, te.created_on, te.spent_on, te.hours, te.issue_id, te.activity, te.updated_on))
         te_user.time_entries.append(te)
         g_time_entry_list.append(te)
+        project_data = get_project_data_by_name(te.project_name)
+        if (project_data == None):
+            print("  不明なプロジェクトに対する作業時間です : %s" % (te.project_name))
+        else:
+            append_wo_duplicate(project_data.active_users, te.user)
         g_first_time_entry_date.former_timestamp(te.spent_on)
 
         row += 1
@@ -2159,6 +2337,42 @@ def read_in_file():
     return
 
 
+
+#/*****************************************************************************/
+#/* チケットの過去データ参照（試験用）                                        */
+#/*****************************************************************************/
+def test_print_old_issue_status(issue_data, some_day):
+    user_data     = issue_data.get_attr_at_some_date('assigned_to',   some_day, NONE_USER)
+    user_name     = get_key_value_str(user_data.id, user_data.name)
+    count         = get_full_width_count_in_text(user_name)
+    user_name     = user_name.ljust(16 - count)
+
+    status        = issue_data.get_attr_at_some_date('status',        some_day, '新規')
+    count         = get_full_width_count_in_text(status)
+    status        = status.ljust(14 - count)
+
+    done_ratio    = issue_data.get_attr_at_some_date('done_ratio',    some_day, 0)
+    done_ratio    = str(done_ratio).rjust(3)
+
+    due_date      = issue_data.get_attr_at_some_date('due_date',      some_day, '')
+    due_date      = str(due_date).ljust(10)
+
+    project       = issue_data.get_attr_at_some_date('project',       some_day, '')
+    count         = get_full_width_count_in_text(project)
+    project       = project.ljust(18 - count)
+
+    tracker       = issue_data.get_attr_at_some_date('tracker',       some_day, '')
+    count         = get_full_width_count_in_text(tracker)
+    tracker       = tracker.ljust(18 - count)
+
+    fixed_version = issue_data.get_attr_at_some_date('fixed_version', some_day, '')
+    count         = get_full_width_count_in_text(fixed_version)
+    fixed_version = fixed_version.ljust(14 - count)
+
+    print("  [%s] : assigned[%s], status[%s], done_ratio[%s], due_date[%s], project[%s], tracker[%s], fixed[%s]" % (some_day, user_name, status, done_ratio, due_date, project, tracker, fixed_version))
+    return
+
+
 #/*****************************************************************************/
 #/* メイン関数                                                                */
 #/*****************************************************************************/
@@ -2193,15 +2407,10 @@ def main():
         time_entry_check(redmine, 0)
         issue_check(redmine)
 
-#    for issue_data in g_issue_list:
-#        print("---- issue[%d] ----" % (issue_data.id))
-#        for offset in range(-5, 2):
-#            monday = get_weeks_monday(g_base_day, offset)
-#            user_data = issue_data.get_attr_at_some_date('assigned_to', monday)
-#            if (user_data != None):
-#                print("issue[%d] was assigned to %s @ %s" % (issue_data.id, get_key_value_str(user_data.id, user_data.name), monday))
-#            else:
-#                print("issue[%d] was assigned to %s @ %s" % (issue_data.id, '-', monday))
+    for issue_data in g_issue_list:
+        print("---- issue[%d] ----" % (issue_data.id))
+        for offset in range(-6, 2):
+            test_print_old_issue_status(issue_data, get_weeks_monday(g_base_day, offset))
 
     output_datas()
 
