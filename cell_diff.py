@@ -7,11 +7,25 @@ import time
 import datetime
 import shutil
 import openpyxl
+import unicodedata
+
 
 from pathlib  import Path
 from redminelib import Redmine
 g_left_file  = ""
 g_right_file = ""
+
+#/*****************************************************************************/
+#/* 全角文字の数をカウント                                                    */
+#/*****************************************************************************/
+def get_full_width_count_in_text(text):
+    count = 0
+    for character in text:
+        if unicodedata.east_asian_width(character) in 'FWA':
+            count += 1
+
+    return count
+
 
 #/*****************************************************************************/
 #/* コマンドライン引数処理                                                    */
@@ -76,6 +90,41 @@ def log_end(start_time):
 
 
 
+def get_disp_string(text, width):
+#   print("get_disp_string Width  : [%d]" % (width))
+#   print("get_disp_string Input  : [%s]" % (text))
+    cut_flag = 0
+    if (result := re.match(r"([^\n]*)\n", text)):
+        text = result.group(1)
+        cut_flag = 1
+
+    length     = len(text)
+    if (length > width):
+        text = text[:(width - 3)]
+        cut_flag = 1
+
+    length     = len(text)
+    full_count = get_full_width_count_in_text(text)
+    over_diff  = (length + full_count + (cut_flag * 3)) - width
+
+    while (over_diff > 0):
+        cut_flag   = 1
+        text = text[:(length - 1)]
+        length     = len(text)
+        full_count = get_full_width_count_in_text(text)
+        length     = len(text)
+        full_count = get_full_width_count_in_text(text)
+        over_diff  = (length + full_count + (cut_flag * 3)) - width
+
+    if (cut_flag):
+        text = text + '...'
+
+    text = text.ljust(width - full_count)
+#   print("get_disp_string Output : [%s]" % (text))
+    return text
+
+
+
 def check_lr_sheets(ws_l, ws_r):
     print("  check sheet[%s]" % (ws_l.title))
 
@@ -91,7 +140,9 @@ def check_lr_sheets(ws_l, ws_r):
                 val_l = ws_l.cell(row, col).value
                 val_r = ws_r.cell(row, col).value
                 if (val_l != val_r):
-                    print("      different Value! [%s] vs [%s] @ (%d, %d)" % (val_l, val_r, row, col))
+                    val_l = get_disp_string(str(val_l), 40)
+                    val_r = get_disp_string(str(val_r), 40)
+                    print("      差異(%4d, %4d) : [%s] vs [%s]" % (row, col, val_l, val_r))
     else:
         print("    max_row : [%d] vs [%d], max_col : [%d] vs [%d]" % (max_row_l, max_row_r, max_col_l, max_col_r))
         if (max_row_l > max_row_r):
@@ -109,7 +160,9 @@ def check_lr_sheets(ws_l, ws_r):
                 val_l = ws_l.cell(row, col).value
                 val_r = ws_r.cell(row, col).value
                 if (val_l != val_r):
-                    print("      different Value! [%s] vs [%s] @ (%d, %d)" % (val_l, val_r, row, col))
+                    val_l = get_disp_string(str(val_l), 40)
+                    val_r = get_disp_string(str(val_r), 40)
+                    print("      差異(%4d, %4d) : [%s] vs [%s]" % (row, col, val_l, val_r))
 
     return
 
@@ -136,6 +189,9 @@ def main():
     check_command_line_option()
     start_time = log_start()
 
+     
+#   print("TEST1:%s" % (get_disp_string("あいうえおかきくけこ", 10)))
+#   print("TEST1:%s" % (get_disp_string("あ\nいうえおかきくけこ", 10)))
     check_lr_books()
 
     log_end(start_time)

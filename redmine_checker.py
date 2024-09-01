@@ -28,8 +28,12 @@ g_opt_journal_filters = []
 g_opt_redmine_version = None
 g_opt_setting_file    = ""
 g_opt_grouping        = 0
+g_opt_cf_format_dic   = {}
+g_opt_cf_multi_list   = []
 
 g_target_project_list = []
+g_current_user_id     = 0
+g_current_user_admin  = False
 g_user_list           = []
 g_cf_type_list        = []
 g_status_type_list    = []
@@ -85,6 +89,16 @@ def get_full_width_count_in_text(text):
             count += 1
 
     return count
+
+
+#/*****************************************************************************/
+#/* 辞書から値を取得                                                          */
+#/*****************************************************************************/
+def get_dictionary_value(dictionary, key, default_val):
+    if (key in dictionary):
+        return dictionary[key]
+
+    return default_val
 
 
 #/*****************************************************************************/
@@ -320,7 +334,7 @@ class cDetailData:
             user_data = get_user_data_by_id(int(value))
             value = get_key_value_str(user_data.id, user_data.name)
         elif (format == 'enumeration'):
-            value = get_key_value_str(int(value), dictionary[value])
+            value = get_key_value_str(int(value), get_dictionary_value(dictionary, value, value))
         elif (format == 'version'):
             value = get_version_str(int(value))
 
@@ -435,13 +449,13 @@ class cCustomFieldData:
 #               print("multiple enum : %s" % cf_value)
                 self.value = []
                 for value in cf_value:
-                    str_value = dictionary[value]
+                    str_value = get_dictionary_value(dictionary, value, value)
                     self.value.append(get_key_value_str(int(value), str_value))
             else:
                 if (cf_value == None) or (cf_value == '') or (cf_value == '0'):
                     self.value = "[0]-"
                 else:
-                    str_value = dictionary[cf_value]
+                    str_value = get_dictionary_value(dictionary, cf_value, cf_value)
                     self.value = get_key_value_str(int(cf_value), str_value)
         elif (format == 'version'):
             #/* versionのIDの場合は、ID＋テキストの形式で保持する。複数可の場合はリスト化する */
@@ -468,6 +482,7 @@ class cCustomFieldData:
         format     = get_custom_field_format(self.id)
         multiple   = get_custom_field_multiple(self.id)
 
+#       print("get_disp_value format:%s, multi:%s" % (format, multiple))
         if (format == "user"):
             if (multiple):
                 name_list = []
@@ -481,6 +496,11 @@ class cCustomFieldData:
             ret_val = '\n'.join(self.value)
             return ret_val
 
+        if (type(self.value) is list):
+            print("Unknown multiple CF! [%s]:[%s]" % (self.name, self.value))
+            ret_val = '\n'.join(self.value)
+            return ret_val
+
         return self.value
 
 
@@ -489,17 +509,46 @@ class cCustomFieldData:
 #/* カスタムフィールドの型情報クラス                                          */
 #/*****************************************************************************/
 class cCustomFieldType:
-    def __init__(self, cf):
-        self.id         = cf.id
-        self.name       = cf.name
-        self.type       = cf.customized_type
-        self.format     = cf.field_format
+    def __init__(self, id):
+        self.id         = id
+        self.name       = ""
+        self.type       = 'issue'
+        self.format     = "unknown"
         self.dictionary = {}
-        self.multiple   = getattr(cf, 'multiple', 0)
+        self.multiple   = False
+        return
+
+    def set_data_by_cf(self, cf):
+        global g_opt_cf_format_dic
+        global g_opt_cf_multi_list
+
+        self.name       = cf.name
+        self.type       = getattr(cf, 'customized_type', 'issue')              #/* 一般ユーザー権限だと取得できない */
+        self.format     = getattr(cf, 'field_format', 'unknown')               #/* 一般ユーザー権限だと取得できない */
+        self.dictionary = {}
+        self.multiple   = getattr(cf, 'multiple', False)
+
+        if (self.name in g_opt_cf_multi_list):
+            if (self.format == 'unknown'):
+                self.multiple = True
+                print("CF[%d]%sを複数選択可能として扱います" % (self.id, self.name))
+            elif (self.multiple == False):
+                print("CF[%d]%sの複数選択可能設定が異なります" % (self.id, self.name))
+
+        if (self.name in g_opt_cf_format_dic):
+            format = g_opt_cf_format_dic[self.name]
+            if (self.format == 'unknown'):
+                self.format = format
+                print("CF[%d]%sのformatを%sとして扱います" % (self.id, self.name, self.format))
+            elif (self.format != format):
+                print("CF[%d]%sのformatが指定された値と異なります [%s] -> [%s]" % (self.id, self.name, self.format, format))
 
         if (self.format == 'enumeration'):
-            for value_label in cf.possible_values:
-                self.dictionary[value_label['value']] = value_label['label']
+            if (hasattr(cf, 'possible_values')):
+                for value_label in cf.possible_values:
+                    self.dictionary[value_label['value']] = value_label['label']
+            else:
+                print("管理者権限がないため、enumerationの値は取得できません")
 
 #            print(self.dictionary)
         return
@@ -584,6 +633,7 @@ class cIssueData:
     def read_issue_data(self, issue):
         global g_latest_issues_update_ts
         global g_opt_list_attrs
+        global g_current_user_admin
 
         self.project           = issue.project.name
         self.parent            = getattr_ex(issue, 'parent', 'id', 0)
@@ -624,6 +674,19 @@ class cIssueData:
         self.custom_fields = []
         if (hasattr(issue, 'custom_fields')):
             for cf in issue.custom_fields:
+#               print("cf[%s]:[%s]" % (cf.name, cf.value))
+#               print(dir(cf))
+                if not (g_current_user_admin):
+                    cf_type = get_custom_field_type(cf.id)
+                    if (cf_type == None):
+                        cf_type = cCustomFieldType(cf.id)                #/* 一般ユーザーの場合、全プロジェクト共通のCustomFieldは事前には取得できないため、未知のCustomFieldが来るかも */
+                        cf_type.set_data_by_cf(cf)                       #/* 一般ユーザーの場合、全プロジェクト共通のCustomFieldは事前には取得できないため、未知のCustomFieldが来るかも */
+                        print("  [%d][%s]" % (cf_type.id, cf_type.name))
+                        g_cf_type_list.append(cf_type)
+                    else:
+                        multiple = getattr(cf, 'multiple', False)
+                        cf_type.multiple = multiple                      #/* 一般ユーザーはチケットから読み出したCFでないと、複数選択可かどうかがわからない */
+
                 cf_data = cCustomFieldData(cf.id, cf.name, cf.value)
                 self.custom_fields.append(cf_data)
                 if (str(cf_data.id) in g_opt_list_attrs):
@@ -791,6 +854,20 @@ class cIssueData:
 
 
 #/*****************************************************************************/
+#/* サブプロジェクトに関するフィルタ取得                                      */
+#/*****************************************************************************/
+def get_subproject_option():
+    global g_opt_include_sub_prj
+
+    if (g_opt_include_sub_prj == 0):
+        l_subproject = '!*'
+    else:
+        l_subproject = '*'
+
+    return l_subproject
+
+
+#/*****************************************************************************/
 #/* 月の初日を返す                                                            */
 #/*****************************************************************************/
 def get_month_start_day(some_day, offset):
@@ -816,7 +893,7 @@ def get_weeks_monday(some_day, offset):
 
 
 #/*****************************************************************************/
-#/* KEYとVALUEの情報を[KEY]VALUE形式のSTRに変換                               */
+#/* 重複無しのappend処理                                                      */
 #/*****************************************************************************/
 def append_wo_duplicate(list, item):
     if (item in list):
@@ -987,7 +1064,7 @@ def get_custom_field_format(id):
     if (cf_type != None):
         return cf_type.format
 
-    return ""
+    return "unknown"
 
 
 #/*****************************************************************************/
@@ -1029,7 +1106,7 @@ def get_custom_field_multiple(id):
     if (cf_type != None):
         return cf_type.multiple
 
-    return 0
+    return False
 
 
 #/*****************************************************************************/
@@ -1098,9 +1175,11 @@ def read_setting_file(file_path):
     global g_opt_setting_file
     global g_opt_grouping
     global g_statistics_data
+    global g_opt_cf_format_dic
+    global g_opt_cf_multi_list
 
     g_opt_setting_file = file_path
-    f = open(file_path, 'r')
+    f = open(file_path, 'r', encoding='utf-8')
     lines = f.readlines()
 
     re_opt_url        = re.compile(r"URL\s+: ([^\n]+)")
@@ -1117,6 +1196,8 @@ def read_setting_file(file_path):
     re_opt_sta_unit   = re.compile(r"STATISTICS UNIT\s+: (day|week|month)")
     re_opt_sta_start  = re.compile(r"STATISTICS START\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
     re_opt_sta_end    = re.compile(r"STATISTICS END\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
+    re_opt_cf_format  = re.compile(r"CF FORMAT INFO\s+: ([^ ,]+)[ ,]+([^\n]+)")
+    re_opt_cf_multi   = re.compile(r"CF MULTIPLE INFO\s+: ([^\n]+)")
 
     journal_append = 0
     for line in lines:
@@ -1157,6 +1238,14 @@ def read_setting_file(file_path):
         elif (result := re_opt_sta_end.match(line)):
             g_statistics_data.end = datetime.date(int(result.group(1)), int(result.group(2)), int(result.group(3)))
 #           print("STATISTICS END   : %s" % g_statistics_data.end)
+        elif (result := re_opt_cf_format.match(line)):
+            key = result.group(2)
+            val = result.group(1)
+            g_opt_cf_format_dic[key] = val
+#           print("CF FORMAT : %s as %s" % (result.group(2), result.group(1)))
+        elif (result := re_opt_cf_multi.match(line)):
+            g_opt_cf_multi_list.append(result.group(1))
+#           print("CF MULTIPLE : %s" % (result.group(1)))
 
     if (journal_append > 0):
         g_opt_list_attrs.append('journals')
@@ -1296,6 +1385,42 @@ def add_project_data(project, included):
 
 
 #/*****************************************************************************/
+#/* ログインとログインユーザーの権限確認                                      */
+#/*****************************************************************************/
+def login_and_get_current_user():
+    global g_opt_api_key
+    global g_opt_user_name
+    global g_opt_pass
+    global g_opt_redmine_version
+    global g_opt_url
+    global g_current_user_id
+    global g_current_user_admin
+
+    print("--------------------------------- Login %s ---------------------------------" % (g_opt_url))
+    try:
+        if (g_opt_api_key == ""):
+            redmine = Redmine(g_opt_url, username=g_opt_user_name, password=g_opt_pass, version = g_opt_redmine_version)
+        else:
+            redmine = Redmine(g_opt_url, key=g_opt_api_key, version = g_opt_redmine_version)
+
+        current_user = redmine.user.get('current')
+    except Exception as e:
+        print('ログインに失敗しました URL[%s]' % g_opt_url)
+        print(f'エラー詳細：{e}')
+        exit(-1)
+
+    #/* ログインユーザーのIDと権限を確認 */
+    g_current_user_id    = current_user.id
+    g_current_user_admin = current_user.admin
+    if (g_current_user_admin):
+        print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+    else:
+        print("一般ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+
+    return redmine
+
+
+#/*****************************************************************************/
 #/* プロジェクト情報の取得                                                    */
 #/*****************************************************************************/
 def check_project_info(redmine):
@@ -1332,23 +1457,39 @@ def check_project_info(redmine):
 #/* ユーザー情報の取得                                                        */
 #/*****************************************************************************/
 def check_user_info(redmine):
+    global g_current_user_admin
+    global g_target_project_list
+
     print("--------------------------------- Check User Datas ---------------------------------")
-    users = redmine.user.all()
+    l_subproject = get_subproject_option()
 
     #/* 全ユーザー情報を取得 */
-    for user in users:
-#       print(dir(user))
-        user.name = user.lastname + ' ' + user.firstname
-        get_user_data(redmine, user.id, user.name)
+    if (g_current_user_admin):
+        users = redmine.user.all()
+        for user in users:
+            user_name = user.lastname + ' ' + user.firstname
+            get_user_data(redmine, user.id, user_name)
 
+        #/* 全グループ情報も取得 */
+        groups = redmine.group.all()
+        for group in groups:
+            get_user_data(redmine, group.id, group.name)
+            print("[%d]%s as a Group" % (group.id, group.name))
+    else:
+        for project_data in g_target_project_list:
+            project = redmine.project.get(project_data.id)
+            for member_ship in project.memberships:
+                if (hasattr(member_ship, 'user')):
+                    user = redmine.user.get(member_ship.user.id)
+                    user_name = user.lastname + ' ' + user.firstname
+                    get_user_data(redmine, user.id, user_name)
+                elif (hasattr(member_ship, 'group')):
+                    group = redmine.group.get(member_ship.group.id)
+                    get_user_data(redmine, group.id, group.name)
+                    print("[%d]%s as a Group" % (group.id, group.name))
+                else:
+                    print("No user or target in MemberShip!")
 
-    #/* 全グループ情報も取得 */
-    groups = redmine.group.all()
-    for group in groups:
-#       print(dir(group))
-#       print(dir(group.memberships))
-        get_user_data(redmine, group.id, group.name)
-        print("[%d]%s as a Group" % (group.id, group.name))
 
     return
 
@@ -1360,12 +1501,27 @@ def check_custom_fields(redmine):
     global g_cf_type_list
 
     print("--------------------------------- Check Custom Fields ---------------------------------")
-    fields = redmine.custom_field.all()
-    for cf in fields:
-        cf_type = cCustomFieldType(cf)
-        if (cf_type.type == "issue"):
-            print("  [%d][%s]:%s" % (cf_type.id, cf_type.name, cf_type.format))
-            g_cf_type_list.append(cf_type)
+    if (g_current_user_admin):
+        fields = redmine.custom_field.all()
+        for cf in fields:
+            cf_type = cCustomFieldType(cf.id)
+            cf_type.set_data_by_cf(cf)
+            if (cf_type.type == "issue"):
+                print("  [%d][%s]:%s" % (cf_type.id, cf_type.name, cf_type.format))
+                g_cf_type_list.append(cf_type)
+    else:
+        for project_data in g_target_project_list:
+            project = redmine.project.get(project_data.id)
+#           print(dir(project))
+            for cf in project.issue_custom_fields:
+#               print(cf)
+#               print(dir(cf))
+                cf_type = get_custom_field_type(cf.id)
+                if (cf_type == None):
+                    cf_type = cCustomFieldType(cf.id)
+                    cf_type.set_data_by_cf(cf)
+                    print("  [%d][%s]" % (cf_type.id, cf_type.name))
+                    g_cf_type_list.append(cf_type)
 
     return
 
@@ -1566,7 +1722,8 @@ def output_user_time(ws):
         for user_data in project_data.active_users:
             print("Active for [%s]:[%s]" % (project_data.name, user_data.name))
 
-    active_user_set = set(active_user_list)
+    active_user_set  = set(active_user_list)
+    active_user_set = sorted(active_user_set, key=lambda user: user.id)
 
     row = 1
     col = 1
@@ -1707,6 +1864,8 @@ def output_settings(ws):
     global g_opt_full_issues
     global g_base_day
     global g_statistics_data
+    global g_opt_cf_format_dic
+    global g_opt_cf_multi_list
 
     print("--------------------------------- Output Settings ---------------------------------")
 
@@ -1782,6 +1941,23 @@ def output_settings(ws):
     ws.cell(row, col).value = g_statistics_data.end
     row += 1
 
+    ws.cell(row, 1).value = 'カスタムフィールドのフォーマット'
+    col = 2
+    for key, value in g_opt_cf_format_dic.items():
+        ws.cell(row, col    ).value = key
+        ws.cell(row, col + 1).value = value
+        row += 1
+
+    row += 1
+
+    ws.cell(row, 1).value = 'カスタムフィールドの複数選択可'
+    col = 2
+    for cf_name in g_opt_cf_multi_list:
+        ws.cell(row, col    ).value = cf_name
+        row += 1
+
+    row += 1
+
     return
 
 #/*****************************************************************************/
@@ -1813,7 +1989,7 @@ def output_id_list(ws):
     ws.cell(row, col).value = 'バージョンID'
     col += 2
     ws.cell(row, col).value = 'カスタムフィールドID'
-    col += 2
+    col += 4
     ws.cell(row, col).value = '選択項目'
     col += 2
 
@@ -1826,7 +2002,7 @@ def output_id_list(ws):
 
     row = 2
     col = 3
-    for key, value in g_project_id_dic.items():
+    for key, value in sorted(g_project_id_dic.items()):
         ws.cell(row, col    ).value = key
         ws.cell(row, col + 1).value = value
         row += 1
@@ -1857,10 +2033,15 @@ def output_id_list(ws):
     for cf_type in g_cf_type_list:
         ws.cell(row, col    ).value = cf_type.id
         ws.cell(row, col + 1).value = cf_type.name
+        ws.cell(row, col + 2).value = cf_type.format
+        if (cf_type.multiple):
+            ws.cell(row, col + 3).value = '複数選択可'
+        else:
+            ws.cell(row, col + 3).value = ''
         row += 1
 
     row = 2
-    col = 13
+    col = 15
     ws.cell(row, col    ).value = 'プライオリティ'
     row += 1
     for key, value in g_enum_priority_dic.items():
@@ -1892,9 +2073,13 @@ def output_datas():
     global g_opt_out_file
     global g_issue_list
     global g_time_entry_list
+    global g_user_list
+    global g_cf_type_list
 
-    g_issue_list      = sorted(g_issue_list,      key=lambda issue: issue.id)
-    g_time_entry_list = sorted(g_time_entry_list, key=lambda te:    te.id)
+    g_issue_list          = sorted(g_issue_list,          key=lambda issue: issue.id)
+    g_time_entry_list     = sorted(g_time_entry_list,     key=lambda te:    te.id)
+    g_user_list           = sorted(g_user_list,           key=lambda ud:    ud.id)
+    g_cf_type_list        = sorted(g_cf_type_list,        key=lambda cf:    cf.id)
 
     print("--------------------------------- Output Redmine Datas ---------------------------------")
     wb = openpyxl.Workbook()
@@ -1943,14 +2128,9 @@ def time_entry_check(redmine, is_full_check):
     global g_time_entry_list
     global g_target_project_list
     global g_user_list
-    global g_opt_include_sub_prj
     global g_latest_time_entry_ts
 
-    if (g_opt_include_sub_prj == 0):
-        l_subproject = '!*'
-    else:
-        l_subproject = '*'
-
+    l_subproject = get_subproject_option()
     if (is_full_check):
         print("--------------------------------- Time Entries Check Full ---------------------------------")
         for user_data in g_user_list:
@@ -1979,18 +2159,13 @@ def time_entry_check(redmine, is_full_check):
 #/*****************************************************************************/
 def full_issue_check(redmine):
     global g_filter_limit
-    global g_opt_include_sub_prj
 
     print("--------------------------------- Full Issue Check ---------------------------------")
     for project_data in g_target_project_list:
         if (project_data.included):
             continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
 
-        if (g_opt_include_sub_prj == 0):
-            l_subproject = '!*'
-        else:
-            l_subproject = '*'
-
+        l_subproject = get_subproject_option()
         filter_offset = 0
         while(1):
             issues = redmine.issue.filter(project_id = project_data.id, subproject_id = l_subproject, status_id = '*', limit = g_filter_limit, offset = filter_offset)
@@ -2013,7 +2188,6 @@ def full_issue_check(redmine):
 #/*****************************************************************************/
 def issue_check(redmine):
     global g_filter_limit
-    global g_opt_include_sub_prj
     global g_latest_issues_update_ts
 
     last_updated = g_latest_issues_update_ts.timestamp.date()
@@ -2022,11 +2196,7 @@ def issue_check(redmine):
         if (project_data.included):
             continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
 
-        if (g_opt_include_sub_prj == 0):
-            l_subproject = '!*'
-        else:
-            l_subproject = '*'
-
+        l_subproject = get_subproject_option()
         updated_option = '>=%s' % last_updated
         filter_offset = 0
         while(1):
@@ -2314,6 +2484,80 @@ def read_issue_list(ws):
 
 
 #/*****************************************************************************/
+#/* ID一覧の読み込み                                                          */
+#/*****************************************************************************/
+def read_id_list(ws):
+    global g_current_user_admin
+    global g_cf_type_list
+
+    print("--------------------------------- Read ID List! ---------------------------------")
+
+    row = 1
+    col = 1
+
+    while (col < 100):
+        if (ws.cell(row, col).value == 'カスタムフィールドID'):
+            break
+        col += 1
+
+    if (col >= 100):
+        print("カスタムフィールドに関する情報が見つかりませんでした")
+        return
+
+    row = 2
+    while (1):
+        id = ws.cell(row, col).value
+        if (id == None):
+            break
+
+        name   = ws.cell(row, col + 1).value
+        format = ws.cell(row, col + 2).value
+        multi  = ws.cell(row, col + 3).value
+        if (multi == '複数選択可'):
+            multiple = True
+        else:
+            multiple = False
+
+        cf_type = get_custom_field_type(id)
+        if (cf_type == None):
+            print("CF[%d][%s]の情報が見つかりません" % (id, name))
+            if (g_current_user_admin):
+                pass                                                 #/* 管理者権限の場合は全情報を取得しているので、何もしない */
+            else:
+                cf_type          = cCustomFieldType(id)              #/* 一般権限の場合はこの時点で登録する                     */
+                cf_type.name     = name
+                cf_type.format   = format
+                cf_type.multiple = multiple
+                g_cf_type_list.append(cf_type)
+        else:
+            if (g_current_user_admin):
+                #/* 管理者権限の場合は全情報を取得しているので、ログを吐くだけ */
+                if (cf_type.name != name):
+                    print("CF[%d]の名前が変わっています [%s] -> [%s]" % (id, name, cf_type.name))
+                if (cf_type.format != format):
+                    print("CF[%d]のフォーマットが変わっています [%s] -> [%s]" % (id, format, cf_type.format))
+                if (cf_type.multiple != multiple):
+                    print("CF[%d]の複数選択可否が変わっています [%s] -> [%s]" % (id, multiple, cf_type.multiple))
+            else:
+                #/* 一般権限の場合は名前が変わっている場合は処理中止する */
+                if (cf_type.name != name):
+                    print("CF[%d]の名前が変わっています [%s] -> [%s]" % (id, name, cf_type.name))
+                    exit(-1)
+
+                if (cf_type.format != format):
+                    print("CF[%d]のフォーマットが変わっています [%s] -> [%s]" % (id, format, cf_type.format))
+                    cf_type.format = format
+
+                if (cf_type.multiple != multiple):
+                    print("CF[%d]の複数選択可否が変わっています [%s] -> [%s]" % (id, multiple, cf_type.multiple))
+                    cf_type.multiple = multiple
+
+        row += 1
+
+    return
+
+
+#/*****************************************************************************/
 #/* 前回出力ファイルの読み込み                                                */
 #/*****************************************************************************/
 def read_in_file():
@@ -2330,6 +2574,8 @@ def read_in_file():
             read_issue_list(ws)
         elif (ws.title == "作業時間一覧"):
             read_time_entry_list(ws)
+        elif (ws.title == "ID一覧"):
+            read_id_list(ws)
         else:
             print("skip ws : %s" % ws.title)
 
@@ -2377,21 +2623,12 @@ def test_print_old_issue_status(issue_data, some_day):
 #/* メイン関数                                                                */
 #/*****************************************************************************/
 def main():
-    global g_opt_user_name
-    global g_opt_pass
-    global g_opt_url
     global g_opt_full_issues
-    global g_opt_api_key
-    global g_opt_redmine_version
 
     check_command_line_option()
     start_time = log_start()
 
-    if (g_opt_api_key == ""):
-        redmine = Redmine(g_opt_url, username=g_opt_user_name, password=g_opt_pass, version = g_opt_redmine_version)
-    else:
-        redmine = Redmine(g_opt_url, key=g_opt_api_key, version = g_opt_redmine_version)
-
+    redmine = login_and_get_current_user()
     check_project_info(redmine)
     check_user_info(redmine)
     check_custom_fields(redmine)
@@ -2407,10 +2644,10 @@ def main():
         time_entry_check(redmine, 0)
         issue_check(redmine)
 
-    for issue_data in g_issue_list:
-        print("---- issue[%d] ----" % (issue_data.id))
-        for offset in range(-6, 2):
-            test_print_old_issue_status(issue_data, get_weeks_monday(g_base_day, offset))
+#   for issue_data in g_issue_list:
+#       print("---- issue[%d] ----" % (issue_data.id))
+#       for offset in range(-6, 2):
+#           test_print_old_issue_status(issue_data, get_weeks_monday(g_base_day, offset))
 
     output_datas()
 

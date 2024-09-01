@@ -5,7 +5,8 @@ REDMINE VERSION : 5.0.7
 
 TARGET PROJECT  : TestProject
 #TARGET PROJECT  : TestSubProject
-TARGET PROJECT  : Redmine�X�N���v�g
+TARGET PROJECT  : Redmineスクリプト
+#TARGET PROJECT  : RM_Test
 INCLUDE SUB PRJ : 1
 
 IN  FILE NAME   : redmine_result.xlsx
@@ -13,23 +14,23 @@ OUT FILE NAME   : redmine_result_%ymd.xlsx
 
 
 #/****************************************************/
-#/* �v���W�F�N�g���͂Ɋւ���ݒ�                     */
+#/* プロジェクト分析に関する設定                     */
 #/****************************************************/
 #STATISTICS UNIT  : day
-#STATISTICS UNIT  : week
-STATISTICS UNIT  : month
+STATISTICS UNIT  : week
+#STATISTICS UNIT  : month
 STATISTICS START : 1900/01/01
 STATISTICS END   : 2100/01/01
 
 
 #/****************************************************/
-#/* �`�P�b�g�ꗗ�̍X�V�����O���[�v������iYES/NO�j */
+#/* チケット一覧の更新情報をグループ化する（YES/NO） */
 #/****************************************************/
 JOURNAL GROUPING : 0
 
 
 #/****************************************************/
-#/* �`�P�b�g�ꗗ�ɏo�͂�����                       */
+#/* チケット一覧に出力する情報                       */
 #/****************************************************/
 ISSUE LIST ATTR : id
 ISSUE LIST ATTR : project
@@ -61,11 +62,13 @@ ISSUE LIST CF   : 9
 ISSUE LIST CF   : 10
 ISSUE LIST CF   : 11
 ISSUE LIST CF   : 12
+ISSUE LIST CF   : 13
+ISSUE LIST CF   : 14
 ISSUE LIST ATTR : journals
 
 
 #/****************************************************/
-#/* �X�V���̃t�B���^                               */
+#/* 更新情報のフィルタ                               */
 #/****************************************************/
 JOURNAL FILTER  : notes
 JOURNAL FILTER  : assigned_to_id
@@ -78,3 +81,21 @@ JOURNAL FILTER  : tracker_id
 JOURNAL FILTER  : project_id
 JOURNAL FILTER  : 3
 JOURNAL FILTER  : 8
+
+
+#/****************************************************/
+#/* 一般ユーザー用のCustom Field情報                 */
+#/****************************************************/
+CF FORMAT INFO   : user        カスタムユーザー改
+CF FORMAT INFO   : version     カスタムバージョン
+CF FORMAT INFO   : version     ターゲットバージョン
+CF FORMAT INFO   : attachment  PUファイル
+CF FORMAT INFO   : enumeration カスタムキーバリューリスト
+CF FORMAT INFO   : user        複数ユーザー
+CF FORMAT INFO   : link        カスタムリンク
+
+CF MULTIPLE INFO : 複数選択可能なリスト
+CF MULTIPLE INFO : カスタムバージョン
+CF MULTIPLE INFO : KV2
+CF MULTIPLE INFO : 複数ユーザー
+
