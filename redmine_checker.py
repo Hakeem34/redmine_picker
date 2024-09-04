@@ -30,6 +30,7 @@ g_opt_setting_file    = ""
 g_opt_grouping        = 0
 g_opt_cf_format_dic   = {}
 g_opt_cf_multi_list   = []
+g_opt_issue_list_type = 'flat'
 
 g_target_project_list = []
 g_current_user_id     = 0
@@ -572,7 +573,7 @@ class cIssueData:
     def __init__(self, id):
         self.id                = id
         self.project           = ""
-        self.parent            = ""
+        self.parent            = 0
         self.children          = []
         self.priority          = ""
         self.tracker           = ""
@@ -1177,6 +1178,7 @@ def read_setting_file(file_path):
     global g_statistics_data
     global g_opt_cf_format_dic
     global g_opt_cf_multi_list
+    global g_opt_issue_list_type
 
     g_opt_setting_file = file_path
     f = open(file_path, 'r', encoding='utf-8')
@@ -1198,6 +1200,7 @@ def read_setting_file(file_path):
     re_opt_sta_end    = re.compile(r"STATISTICS END\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
     re_opt_cf_format  = re.compile(r"CF FORMAT INFO\s+: ([^ ,]+)[ ,]+([^\n]+)")
     re_opt_cf_multi   = re.compile(r"CF MULTIPLE INFO\s+: ([^\n]+)")
+    re_opt_issue_list = re.compile(r"ISSER LIST TYPE\s+: ([^\n]+)")
 
     journal_append = 0
     for line in lines:
@@ -1246,6 +1249,14 @@ def read_setting_file(file_path):
         elif (result := re_opt_cf_multi.match(line)):
             g_opt_cf_multi_list.append(result.group(1))
 #           print("CF MULTIPLE : %s" % (result.group(1)))
+        elif (result := re_opt_issue_list.match(line)):
+            list_type = result.group(1)
+            if (list_type == 'tree') or (list_type == 'flat'):
+#               print("ISSUE LIST : %s" % list_type)
+                g_opt_issue_list_type = list_type
+            else:
+                print("INVALID ISSUE LIST TYPE : %s" % list_type)
+
 
     if (journal_append > 0):
         g_opt_list_attrs.append('journals')
@@ -1480,9 +1491,8 @@ def check_user_info(redmine):
             project = redmine.project.get(project_data.id)
             for member_ship in project.memberships:
                 if (hasattr(member_ship, 'user')):
-                    user = redmine.user.get(member_ship.user.id)
-                    user_name = user.lastname + ' ' + user.firstname
-                    get_user_data(redmine, user.id, user_name)
+                    user = member_ship.user
+                    get_user_data(redmine, user.id, user.name)
                 elif (hasattr(member_ship, 'group')):
                     group = redmine.group.get(member_ship.group.id)
                     get_user_data(redmine, group.id, group.name)
@@ -1671,22 +1681,52 @@ def output_issue_list_line(ws, row, issue_data):
 
 
 #/*****************************************************************************/
+#/* 結果フォーマット木出力                                                    */
+#/*****************************************************************************/
+def output_issue_list_tree(ws, row, issue_data, level):
+    global g_opt_grouping
+
+    start_row = row
+    offset = output_issue_list_line(ws, row, issue_data)
+    if (g_opt_grouping):
+        ws.row_dimensions.group(row + 1, row + offset, outline_level=2, hidden=True)
+    else:
+        ws.row_dimensions.group(row + 1, row + offset, outline_level=2, hidden=False)
+    row += (1 + offset)
+
+    for child in issue_data.children:
+        child_issue = get_issue_data_by_id(child)
+        offset += output_issue_list_tree(ws, row, child_issue, level + 1)
+        row += offset
+
+    return row - start_row
+
+
+#/*****************************************************************************/
 #/* 結果出力                                                                  */
 #/*****************************************************************************/
 def output_all_issues_list(ws):
     global g_issue_list
     global g_opt_grouping
+    global g_opt_issue_list_type
 
-    print("--------------------------------- Output Issue List ---------------------------------")
+    print("--------------------------------- Output Issue List(%s) ---------------------------------" % (g_opt_issue_list_type))
     output_issue_list_format_line(ws)
     row = 3
-    for issue_data in g_issue_list:
-        offset = output_issue_list_line(ws, row, issue_data)
-        if (g_opt_grouping):
-            ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=True)
-        else:
-            ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=False)
-        row += (1 + offset)
+    if (g_opt_issue_list_type == 'flat'):
+        for issue_data in g_issue_list:
+            offset = output_issue_list_line(ws, row, issue_data)
+            if (g_opt_grouping):
+                ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=True)
+            else:
+                ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=False)
+            row += (1 + offset)
+    else:
+        for issue_data in g_issue_list:
+            if (issue_data.parent == 0):
+                offset = output_issue_list_tree(ws, row, issue_data, 0)
+#               ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=True)
+                row += offset
 
     return
 
