@@ -27,13 +27,13 @@ g_opt_include_sub_prj = 1
 g_opt_journal_filters = []
 g_opt_redmine_version = None
 g_opt_setting_file    = ""
-g_opt_grouping        = 0
+g_opt_grouping        = False
 g_opt_cf_format_dic   = {}
 g_opt_cf_multi_list   = []
 g_opt_issue_list_type = 'flat'
 
 g_target_project_list = []
-g_current_user_id     = 0
+g_current_user        = None
 g_current_user_admin  = False
 g_user_list           = []
 g_cf_type_list        = []
@@ -78,6 +78,7 @@ ATTR_NAME_DIC      = {
 re_1st_line         = re.compile(r"^([^\n]+)\n")
 re_key_val_disp     = re.compile(r"^\[([0-9]+)\].+")
 re_cf_data          = re.compile(r"^cf_([0-9]+)")
+re_issue_id         = re.compile(r"^\#*([0-9]+)")
 
 
 #/*****************************************************************************/
@@ -502,7 +503,7 @@ class cCustomFieldData:
             ret_val = '\n'.join(self.value)
             return ret_val
 
-        return self.value
+        return omit_multi_line_str(enc_dec_str(self.value))
 
 
 
@@ -593,6 +594,9 @@ class cIssueData:
         self.journals          = []
         self.time_entries      = []
         self.custom_fields     = []
+
+        self.group_start       = 0             #/* Excel出力の際のGroup化 開始行 */
+        self.group_end         = 0             #/* Excel出力の際のGroup化 終了行 */
         return
 
     #/*****************************************************************************/
@@ -943,6 +947,20 @@ def get_cell_value_digit(ws, row, col, none_value):
 
 
 #/*****************************************************************************/
+#/* セルの値の取得(チケットID)                                                */
+#/*****************************************************************************/
+def get_cell_value_issue_id(ws, row, col, none_value):
+    id_str = get_cell_value_str(ws, row, col, "")
+
+    if (result := re_issue_id.match(id_str)):
+        issue_id = int(result.group(1))
+    else:
+        issue_id = none_value
+
+    return issue_id
+
+
+#/*****************************************************************************/
 #/* セルの値の取得(文字列)                                                    */
 #/*****************************************************************************/
 def get_cell_value_str(ws, row, col, none_value):
@@ -1231,7 +1249,10 @@ def read_setting_file(file_path):
         elif (result := re_opt_version.match(line)):
             g_opt_redmine_version = result.group(1)
         elif (result := re_opt_grouping.match(line)):
-            g_opt_grouping = int(result.group(1))
+            if (result.group(1) == 'True'):
+                g_opt_grouping = True
+            else:
+                g_opt_grouping = False
         elif (result := re_opt_sta_unit.match(line)):
             g_statistics_data.unit = result.group(1)
 #           print("STATISTICS UNIT  : %s" % g_statistics_data.unit)
@@ -1377,7 +1398,17 @@ def get_version_str(version_id):
 #/* プロジェクト情報の登録                                                    */
 #/*****************************************************************************/
 def add_project_data(project, included):
+    global g_current_user
+    global g_current_user_admin
     global g_target_project_list
+
+    for member_ship in g_current_user.memberships:
+        if (project.name == member_ship.project.name):
+            break
+
+    if (g_current_user_admin == False) and (project.name != member_ship.project.name):
+        print("このユーザー[%s]は[%s]を参照できません" % (g_current_user.id, project.name))
+        return
 
     project_data = cProjectData(project)
     for version in project.versions:
@@ -1404,7 +1435,7 @@ def login_and_get_current_user():
     global g_opt_pass
     global g_opt_redmine_version
     global g_opt_url
-    global g_current_user_id
+    global g_current_user
     global g_current_user_admin
 
     print("--------------------------------- Login %s ---------------------------------" % (g_opt_url))
@@ -1421,13 +1452,23 @@ def login_and_get_current_user():
         exit(-1)
 
     #/* ログインユーザーのIDと権限を確認 */
-    g_current_user_id    = current_user.id
-    g_current_user_admin = current_user.admin
-    if (g_current_user_admin):
-        print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+    g_current_user = current_user
+    if (hasattr(current_user, 'admin')):
+        g_current_user_admin = current_user.admin
+        if (g_current_user_admin):
+            print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+        else:
+            print("一般ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
     else:
-        print("一般ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+        print("管理者情報が取得できません（Redmine4.0.0未満）")
+        if (hasattr(current_user, 'mail')):
+            g_current_user_admin = True
+            print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+        else:
+            g_current_user_admin = False
+            print("一般ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
 
+#   print(dir(current_user))
     return redmine
 
 
@@ -1641,15 +1682,19 @@ def output_issue_list_format_line(ws):
 #/*****************************************************************************/
 #/* 結果フォーマット行出力                                                    */
 #/*****************************************************************************/
-def output_issue_list_line(ws, row, issue_data):
+def output_issue_list_line(ws, row, issue_data, level):
     global g_opt_list_attrs
+    global g_opt_issue_list_type
 
     col = 1
     offset = 0
     for item in g_opt_list_attrs:
         if (item != 'journals'):
 #           print("disp attr : %s" % item)
-            ws.cell(row, col).value = issue_data.get_disp_attr(item)
+            if (item == 'id') and (g_opt_issue_list_type == 'tree'):
+                ws.cell(row, col).value = ('#' * level) + str(issue_data.get_disp_attr(item))
+            else:
+                ws.cell(row, col).value = issue_data.get_disp_attr(item)
         else:
             for journal in issue_data.journals:
                 if (journal.is_filter_pass()):
@@ -1677,6 +1722,12 @@ def output_issue_list_line(ws, row, issue_data):
     if (offset > 0):
         offset -= 1          #/* 1行目のjournalはカウントしないため、引いておく(戻り値はExtraの行数) */
 
+    if (offset > 0):
+        #/* Extra行がある場合は、Group化の範囲を覚えておく */
+        issue_data.group_start = row + 1
+        issue_data.group_end   = row + offset
+
+    print("Issue[%d] row[%d] offset[%d]" % (issue_data.id, row, offset))
     return offset
 
 
@@ -1687,18 +1738,18 @@ def output_issue_list_tree(ws, row, issue_data, level):
     global g_opt_grouping
 
     start_row = row
-    offset = output_issue_list_line(ws, row, issue_data)
-    if (g_opt_grouping):
-        ws.row_dimensions.group(row + 1, row + offset, outline_level=2, hidden=True)
-    else:
-        ws.row_dimensions.group(row + 1, row + offset, outline_level=2, hidden=False)
+    offset = output_issue_list_line(ws, row, issue_data, level)
+#   if (offset > 0):
+#       ws.row_dimensions.group(row + 1, row + offset, outline_level=2, hidden=g_opt_grouping)
+#       print("Issue[%d] Group[%d]-[%d]" % (issue_data.id, row + 1, row + offset))
     row += (1 + offset)
 
     for child in issue_data.children:
         child_issue = get_issue_data_by_id(child)
-        offset += output_issue_list_tree(ws, row, child_issue, level + 1)
+        offset = output_issue_list_tree(ws, row, child_issue, level + 1)
         row += offset
 
+#   print("Issue[%d] row[%d] start[%d] offset[%d]" % (issue_data.id, row, start_row, offset))
     return row - start_row
 
 
@@ -1715,18 +1766,23 @@ def output_all_issues_list(ws):
     row = 3
     if (g_opt_issue_list_type == 'flat'):
         for issue_data in g_issue_list:
-            offset = output_issue_list_line(ws, row, issue_data)
-            if (g_opt_grouping):
-                ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=True)
-            else:
-                ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=False)
+            offset = output_issue_list_line(ws, row, issue_data, 0)
+            if (offset > 0):
+                ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=g_opt_grouping)
+#               print("Issue[%d] Group[%d]-[%d]" % (issue_data.id, row + 1, row + offset))
             row += (1 + offset)
     else:
         for issue_data in g_issue_list:
             if (issue_data.parent == 0):
                 offset = output_issue_list_tree(ws, row, issue_data, 0)
-#               ws.row_dimensions.group(row + 1, row + offset, outline_level=1, hidden=True)
+                ws.row_dimensions.group(row + 1, row + offset - 1, outline_level=1, hidden=True)
+#               print("Root Issue[%d] Group[%d]-[%d]" % (issue_data.id, row + 1, row + offset))
                 row += offset
+
+        for issue_data in g_issue_list:
+            if (issue_data.group_start != 0):
+                ws.row_dimensions.group(issue_data.group_start, issue_data.group_end, outline_level=2, hidden=g_opt_grouping)
+#               print("Issue2[%d] Group[%d]-[%d]" % (issue_data.id, issue_data.group_start, issue_data.group_end))
 
     return
 
@@ -1906,6 +1962,8 @@ def output_settings(ws):
     global g_statistics_data
     global g_opt_cf_format_dic
     global g_opt_cf_multi_list
+    global g_current_user
+    global g_opt_issue_list_type
 
     print("--------------------------------- Output Settings ---------------------------------")
 
@@ -1929,6 +1987,11 @@ def output_settings(ws):
     ws.cell(row, 2).value = g_opt_setting_file
     row += 1
 
+    user_data = get_user_data_by_id(g_current_user.id)
+    ws.cell(row, 1).value = '実行ユーザー'
+    ws.cell(row, 2).value = get_key_value_str(user_data.id, user_data.name)
+    row += 1
+
     ws.cell(row, 1).value = 'ターゲットプロジェクト'
     col = 2
     for project in g_target_project_list:
@@ -1945,6 +2008,10 @@ def output_settings(ws):
 
     ws.cell(row, 1).value = '入力ファイル'
     ws.cell(row, 2).value = g_opt_in_file
+    row += 1
+
+    ws.cell(row, 1).value = 'チケット一覧形式'
+    ws.cell(row, 2).value = g_opt_issue_list_type
     row += 1
 
     ws.cell(row, 1).value = '表示するチケット属性'
@@ -2292,7 +2359,7 @@ def read_journal_lines(ws, row, issue_data, j_col, d_col):
         offset += 1
 
         #/* 次の行のチケットIDを取得 */
-        next_id = get_cell_value_digit(ws, row + offset, 1, 0)
+        next_id = get_cell_value_issue_id(ws, row + offset, 1, 0)
 
 
     if (offset > 0):
@@ -2494,9 +2561,7 @@ def read_issue_list(ws):
     row = 3
     while (1):
         col = 1
-        issue_id = get_cell_value_digit(ws, row, col, 0)
-#       print("issue id:%d" % (issue_id))
-
+        issue_id = get_cell_value_issue_id(ws, row, col, 0)
         if (issue_id == 0):
             if (detail_col == 0):
                 #/* 更新データの列がない場合は、即終了 */
