@@ -12,8 +12,9 @@ import unicodedata
 
 from pathlib  import Path
 from redminelib import Redmine
-g_left_file  = ""
-g_right_file = ""
+g_left_file  = ''
+g_right_file = ''
+g_out_path   = '.'
 
 #/*****************************************************************************/
 #/* 全角文字の数をカウント                                                    */
@@ -33,13 +34,14 @@ def get_full_width_count_in_text(text):
 def check_command_line_option():
     global g_left_file
     global g_right_file
+    global g_out_path
 
     sys.argv.pop(0)
     for arg in sys.argv:
         if (os.path.isfile(arg)):
-            if (g_left_file == ""):
+            if (g_left_file == ''):
                 g_left_file = arg
-            elif (g_right_file == ""):
+            elif (g_right_file == ''):
                 g_right_file = arg
             else:
                 print("Too many args! : %s" % arg)
@@ -48,9 +50,11 @@ def check_command_line_option():
             print("invalid arg : %s" % arg)
 
 
-    if (g_left_file == "") or (g_right_file == ""):
+    if (g_left_file == '') or (g_right_file == ''):
         print("usage : cell_diff.py [file A] [file B]")
+        exit(0)
 
+    g_out_path = os.path.dirname(g_right_file)
     return
 
 
@@ -59,10 +63,12 @@ def check_command_line_option():
 #/* 処理開始ログ                                                              */
 #/*****************************************************************************/
 def log_start():
+    global g_out_path
+
     now = datetime.datetime.now()
 
     time_stamp = now.strftime('%Y%m%d_%H%M%S')
-    log_path = 'cell_diff_' + time_stamp + '.txt'
+    log_path = g_out_path + '\\cell_diff_' + time_stamp + '.txt'
     log_file = open(log_path, "w")
     sys.stdout = log_file
 
@@ -89,7 +95,9 @@ def log_end(start_time):
     return
 
 
-
+#/*****************************************************************************/
+#/* 表示用文字列取得                                                          */
+#/*****************************************************************************/
 def get_disp_string(text, width):
 #   print("get_disp_string Width  : [%d]" % (width))
 #   print("get_disp_string Input  : [%s]" % (text))
@@ -124,7 +132,9 @@ def get_disp_string(text, width):
     return text
 
 
-
+#/*****************************************************************************/
+#/* シートの比較                                                              */
+#/*****************************************************************************/
 def check_lr_sheets(ws_l, ws_r):
     print("  check sheet[%s]" % (ws_l.title))
 
@@ -166,6 +176,10 @@ def check_lr_sheets(ws_l, ws_r):
 
     return
 
+
+#/*****************************************************************************/
+#/* ブックの比較                                                              */
+#/*****************************************************************************/
 def check_lr_books():
     global g_left_file
     global g_right_file

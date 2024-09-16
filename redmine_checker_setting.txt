@@ -13,14 +13,39 @@ IN  FILE NAME   : redmine_result.xlsx
 OUT FILE NAME   : redmine_result_%ymd.xlsx
 
 
-#/****************************************************/
-#/* プロジェクト分析に関する設定                     */
-#/****************************************************/
-#STATISTICS UNIT  : day
-STATISTICS UNIT  : week
-#STATISTICS UNIT  : month
-STATISTICS START : 1900/01/01
-STATISTICS END   : 2100/01/01
+#/******************************************************************************************************/
+#/* プロジェクト分析に関する設定                                                                       */
+#/* TARGET : time_entry / issue / update / user                                                        */
+#/* UNIT   : day / week / month                                                                        */
+#/* KEY    : user / activity / status / is_close / project / tracker / priority / fixed_version / cf_* */
+#/******************************************************************************************************/
+STATS[1] TITLE     : 作業時間
+STATS[1] TARGET    : time_entry
+STATS[1] UNIT      : week
+STATS[1] START     : 1970/01/01
+STATS[1] END       : 2099/12/31
+STATS[1] KEY[1]    : user
+STATS[1] KEY[2]    : cf_1
+STATS[1] KEY[3]    : activity
+
+STATS[2] TITLE     : チケット情報
+STATS[2] TARGET    : issue
+STATS[2] UNIT      : month
+
+STATS[3] TITLE     : ユーザー情報
+STATS[3] TARGET    : user
+STATS[3] UNIT      : month
+
+
+#STATISTICS UNIT   : day
+STATISTICS UNIT    : week
+#STATISTICS UNIT   : month
+
+STATISTICS START   : 1970/01/01
+STATISTICS END     : 2099/12/31
+STATISTICS 1ST KEY : tracker
+STATISTICS 2ND KEY : priority
+STATISTICS 3RD KEY : status
 
 
 #/****************************************************/
@@ -92,6 +117,7 @@ JOURNAL FILTER  : 8
 #/****************************************************/
 #/* 一般ユーザー用のCustom Field情報                 */
 #/****************************************************/
+CF FORMAT INFO   : list        工程
 CF FORMAT INFO   : user        カスタムユーザー改
 CF FORMAT INFO   : version     カスタムバージョン
 CF FORMAT INFO   : version     ターゲットバージョン

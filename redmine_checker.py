@@ -48,6 +48,7 @@ g_enum_activity_dic   = {}
 g_enum_category_dic   = {}
 g_filter_limit        = 20
 g_base_day            = datetime.date.today()
+g_stats_setting_dic   = {}
 
 
 
@@ -81,26 +82,39 @@ re_cf_data          = re.compile(r"^cf_([0-9]+)")
 re_issue_id         = re.compile(r"^\#*([0-9]+)")
 
 
-#/*****************************************************************************/
-#/* 全角文字の数をカウント                                                    */
-#/*****************************************************************************/
-def get_full_width_count_in_text(text):
-    count = 0
-    for character in text:
-        if unicodedata.east_asian_width(character) in 'FWA':
-            count += 1
-
-    return count
-
 
 #/*****************************************************************************/
-#/* 辞書から値を取得                                                          */
+#/* 辞書型のリスト管理クラス                                                  */
 #/*****************************************************************************/
-def get_dictionary_value(dictionary, key, default_val):
-    if (key in dictionary):
-        return dictionary[key]
+class cListDictionary:
+    def __init__(self):
+        self.dictionary = {}
+        return
 
-    return default_val
+    def append_key(self, key):
+        if (key not in self.dictionary):
+            self.dictionary[key] = []
+        return
+
+    def append_item(self, key, item):
+        if (key in self.dictionary):
+            self.dictionary[key].append(item)
+        else:
+            self.dictionary[key] = [item]
+        return
+
+    def append_wo_duplicate(self, key, item):
+        if (key in self.dictionary):
+            append_wo_duplicate(self.dictionary[key], item)
+        else:
+            self.dictionary[key] = [item]
+        return
+
+    def get_item_list(self, key):
+        if (key in self.dictionary):
+            return self.dictionary[key]
+
+        return []
 
 
 #/*****************************************************************************/
@@ -108,9 +122,12 @@ def get_dictionary_value(dictionary, key, default_val):
 #/*****************************************************************************/
 class cStatisticsData:
     def __init__(self):
-        self.unit = "week"
-        self.start = datetime.date(1900, 1, 1)
-        self.end   = datetime.date(2100, 1, 1)
+        self.title  = ""
+        self.target = ""
+        self.unit   = "week"
+        self.start  = datetime.date(1970,  1,  1)
+        self.end    = datetime.date(2099, 12, 31)
+        self.keys   = {1:'-',2:'-',3:'-'}
         return
 
     def get_next_unit_date(self, some_date):
@@ -124,6 +141,45 @@ class cStatisticsData:
         return output_date
 
 g_statistics_data = cStatisticsData()
+
+
+#/*****************************************************************************/
+#/* 統計データキーの登録                                                      */
+#/*****************************************************************************/
+def check_all_stats_settings():
+    global g_stats_setting_dic
+
+    for key, value in g_stats_setting_dic.items():
+        if (value.keys[1] == '-'):
+            continue
+
+        g_stats_keys.append_wo_duplicate(value.target, value.keys[1])
+
+        if (value.keys[2] == '-'):
+            continue
+
+        g_stats_keys.append_wo_duplicate(value.target, value.keys[2])
+
+        if (value.keys[3] == '-'):
+            continue
+
+        g_stats_keys.append_wo_duplicate(value.target, value.keys[3])
+
+    return
+
+
+#/*****************************************************************************/
+#/* 統計データ出力設定の取得                                                  */
+#/*****************************************************************************/
+def get_stats_data(number):
+    global g_stats_setting_dic
+
+    if (number in g_stats_setting_dic):
+        return g_stats_setting_dic[number]
+
+#   print("new stats data! %s" % number)
+    g_stats_setting_dic[number] = cStatisticsData()
+    return g_stats_setting_dic[number]
 
 
 #/*****************************************************************************/
@@ -144,8 +200,8 @@ class cTimeStamp:
             self.timestamp = ts
         return
 
-g_latest_issues_update_ts = cTimeStamp(datetime.datetime(1900, 1, 1, 0, 0))
-g_latest_time_entry_ts    = cTimeStamp(datetime.datetime(1900, 1, 1, 0, 0))
+g_latest_issues_update_ts = cTimeStamp(datetime.datetime(1970, 1, 1, 0, 0))
+g_latest_time_entry_ts    = cTimeStamp(datetime.datetime(1970, 1, 1, 0, 0))
 g_first_time_entry_date   = cTimeStamp(datetime.date(2100, 1, 1))
 
 
@@ -648,7 +704,7 @@ class cIssueData:
         for child in children:
             self.children.append(child.id)
 
-        self.subject           = issue.subject
+        self.subject           = enc_dec_str(issue.subject)
         self.priority          = issue.priority.name
         self.tracker           = issue.tracker.name
         self.status            = issue.status.name
@@ -856,6 +912,37 @@ class cIssueData:
                     print("    Detail(x)[%s][%s] %s -> %s" % (detail_data.property, detail_data.name, old_val, new_val))
 
         return
+
+
+#/*****************************************************************************/
+#/* 標準出力とエラー出力の両方に出力                                          */
+#/*****************************************************************************/
+def print_both(text):
+    print(text, file=sys.stderr)
+    print(text)
+    return
+
+
+#/*****************************************************************************/
+#/* 全角文字の数をカウント                                                    */
+#/*****************************************************************************/
+def get_full_width_count_in_text(text):
+    count = 0
+    for character in text:
+        if unicodedata.east_asian_width(character) in 'FWA':
+            count += 1
+
+    return count
+
+
+#/*****************************************************************************/
+#/* 辞書から値を取得                                                          */
+#/*****************************************************************************/
+def get_dictionary_value(dictionary, key, default_val):
+    if (key in dictionary):
+        return dictionary[key]
+
+    return default_val
 
 
 #/*****************************************************************************/
@@ -1220,6 +1307,13 @@ def read_setting_file(file_path):
     re_opt_cf_multi   = re.compile(r"CF MULTIPLE INFO\s+: ([^\n]+)")
     re_opt_issue_list = re.compile(r"ISSER LIST TYPE\s+: ([^\n]+)")
 
+    re_opt_stats_title = re.compile(r"STATS\[([0-9]+)\] TITLE\s+: ([^\n]+)")
+    re_opt_stats_tgt   = re.compile(r"STATS\[([0-9]+)\] TARGET\s+: ([^\n]+)")
+    re_opt_stats_unit  = re.compile(r"STATS\[([0-9]+)\] UNIT\s+: ([^\n]+)")
+    re_opt_stats_start = re.compile(r"STATS\[([0-9]+)\] START\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
+    re_opt_stats_end   = re.compile(r"STATS\[([0-9]+)\] END\s+: ([0-9]+)[\/\-\s]([0-9]+)[\/\-\s]([0-9]+)")
+    re_opt_stats_key   = re.compile(r"STATS\[([0-9]+)\] KEY\[([0-9]+)\]\s+: ([^\n]+)")
+
     journal_append = 0
     for line in lines:
 #       print ("line:%s" % line)
@@ -1255,28 +1349,43 @@ def read_setting_file(file_path):
                 g_opt_grouping = False
         elif (result := re_opt_sta_unit.match(line)):
             g_statistics_data.unit = result.group(1)
-#           print("STATISTICS UNIT  : %s" % g_statistics_data.unit)
         elif (result := re_opt_sta_start.match(line)):
             g_statistics_data.start = datetime.date(int(result.group(1)), int(result.group(2)), int(result.group(3)))
-#           print("STATISTICS START : %s" % g_statistics_data.start)
         elif (result := re_opt_sta_end.match(line)):
             g_statistics_data.end = datetime.date(int(result.group(1)), int(result.group(2)), int(result.group(3)))
-#           print("STATISTICS END   : %s" % g_statistics_data.end)
         elif (result := re_opt_cf_format.match(line)):
             key = result.group(2)
             val = result.group(1)
             g_opt_cf_format_dic[key] = val
-#           print("CF FORMAT : %s as %s" % (result.group(2), result.group(1)))
         elif (result := re_opt_cf_multi.match(line)):
             g_opt_cf_multi_list.append(result.group(1))
-#           print("CF MULTIPLE : %s" % (result.group(1)))
         elif (result := re_opt_issue_list.match(line)):
             list_type = result.group(1)
             if (list_type == 'tree') or (list_type == 'flat'):
-#               print("ISSUE LIST : %s" % list_type)
                 g_opt_issue_list_type = list_type
             else:
                 print("INVALID ISSUE LIST TYPE : %s" % list_type)
+        elif (result := re_opt_stats_title.match(line)):
+            stats_data        = get_stats_data(int(result.group(1)))
+            stats_data.title  = result.group(2)
+#           print("STATS[%s] Title   : %s" % (result.group(1), result.group(2)))
+        elif (result := re_opt_stats_tgt.match(line)):
+            stats_data        = get_stats_data(int(result.group(1)))
+            stats_data.target = result.group(2)
+#           print("STATS[%s] Target  : %s" % (result.group(1), result.group(2)))
+        elif (result := re_opt_stats_start.match(line)):
+            stats_data        = get_stats_data(int(result.group(1)))
+            stats_data.start  = datetime.date(int(result.group(2)), int(result.group(3)), int(result.group(4)))
+#           print("STATS[%s] Start   : %s" % (result.group(1), stats_data.start))
+        elif (result := re_opt_stats_end.match(line)):
+            stats_data        = get_stats_data(int(result.group(1)))
+            stats_data.end    = datetime.date(int(result.group(2)), int(result.group(3)), int(result.group(4)))
+#           print("STATS[%s] End     : %s" % (result.group(1), stats_data.end))
+        elif (result := re_opt_stats_key.match(line)):
+            stats_data               = get_stats_data(int(result.group(1)))
+            key_num                  = int(result.group(2))
+            stats_data.keys[key_num] = result.group(3)
+#           print("STATS[%s] KEY[%s]  : %s" % (result.group(1), result.group(2), result.group(3)))
 
 
     if (journal_append > 0):
@@ -1453,20 +1562,21 @@ def login_and_get_current_user():
 
     #/* ログインユーザーのIDと権限を確認 */
     g_current_user = current_user
+    current_user_name = enc_dec_str(current_user.lastname) + ' ' + enc_dec_str(current_user.firstname)
     if (hasattr(current_user, 'admin')):
         g_current_user_admin = current_user.admin
         if (g_current_user_admin):
-            print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+            print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user_name))
         else:
-            print("一般ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+            print("一般ユーザー:[%d][%s]" % (current_user.id, current_user_name))
     else:
         print("管理者情報が取得できません（Redmine4.0.0未満）")
         if (hasattr(current_user, 'mail')):
             g_current_user_admin = True
-            print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+            print("管理者ユーザー:[%d][%s]" % (current_user.id, current_user_name))
         else:
             g_current_user_admin = False
-            print("一般ユーザー:[%d][%s]" % (current_user.id, current_user.lastname + ' ' + current_user.firstname))
+            print("一般ユーザー:[%d][%s]" % (current_user.id, current_user_name))
 
 #   print(dir(current_user))
     return redmine
@@ -1481,7 +1591,7 @@ def check_project_info(redmine):
     global g_project_id_dic
     global g_opt_include_sub_prj
 
-    print("--------------------------------- Check Project Datas ---------------------------------")
+    print_both("--------------------------------- Check Project Datas ---------------------------------")
     projects = redmine.project.all()
 
     #/* 対象プロジェクトからIDを取得 */
@@ -1512,32 +1622,32 @@ def check_user_info(redmine):
     global g_current_user_admin
     global g_target_project_list
 
-    print("--------------------------------- Check User Datas ---------------------------------")
+    print_both("--------------------------------- Check User Datas ---------------------------------")
     l_subproject = get_subproject_option()
 
     #/* 全ユーザー情報を取得 */
     if (g_current_user_admin):
         users = redmine.user.all()
         for user in users:
-            user_name = user.lastname + ' ' + user.firstname
+            user_name = enc_dec_str(user.lastname) + ' ' + enc_dec_str(user.firstname)
             get_user_data(redmine, user.id, user_name)
 
         #/* 全グループ情報も取得 */
         groups = redmine.group.all()
         for group in groups:
-            get_user_data(redmine, group.id, group.name)
-            print("[%d]%s as a Group" % (group.id, group.name))
+            get_user_data(redmine, group.id, enc_dec_str(group.name))
+            print("[%d]%s as a Group" % (group.id, enc_dec_str(group.name)))
     else:
         for project_data in g_target_project_list:
             project = redmine.project.get(project_data.id)
             for member_ship in project.memberships:
                 if (hasattr(member_ship, 'user')):
                     user = member_ship.user
-                    get_user_data(redmine, user.id, user.name)
+                    get_user_data(redmine, user.id, enc_dec_str(user.name))
                 elif (hasattr(member_ship, 'group')):
                     group = redmine.group.get(member_ship.group.id)
-                    get_user_data(redmine, group.id, group.name)
-                    print("[%d]%s as a Group" % (group.id, group.name))
+                    get_user_data(redmine, group.id, enc_dec_str(group.name))
+                    print("[%d]%s as a Group" % (group.id, enc_dec_str(group.name)))
                 else:
                     print("No user or target in MemberShip!")
 
@@ -1551,7 +1661,7 @@ def check_user_info(redmine):
 def check_custom_fields(redmine):
     global g_cf_type_list
 
-    print("--------------------------------- Check Custom Fields ---------------------------------")
+    print_both("--------------------------------- Check Custom Fields ---------------------------------")
     if (g_current_user_admin):
         fields = redmine.custom_field.all()
         for cf in fields:
@@ -1585,7 +1695,7 @@ def check_issue_status(redmine):
 
     statuses = redmine.issue_status.all()
 
-    print("--------------------------------- Check Issue Status Types ---------------------------------")
+    print_both("--------------------------------- Check Issue Status Types ---------------------------------")
     for status in statuses:
         status_type = cIssueStatusType(status)
         print("  [%d][%s] is_closed : %d" % (status_type.id, status_type.name, status_type.is_closed))
@@ -1612,7 +1722,7 @@ def get_issue_status_name(status_id):
 def check_tracker_id(redmine):
     global g_tracker_id_dic
 
-    print("--------------------------------- Check Tracker Types ---------------------------------")
+    print_both("--------------------------------- Check Tracker Types ---------------------------------")
     trackers = redmine.tracker.all()
 
     for tracker in trackers:
@@ -1633,7 +1743,7 @@ def check_enumerations(redmine):
     issue_priorities      = redmine.enumeration.filter(resource='issue_priorities')
     document_categories   = redmine.enumeration.filter(resource='document_categories')
 
-    print("--------------------------------- Check Enumeration Types ---------------------------------")
+    print_both("--------------------------------- Check Enumeration Types ---------------------------------")
     print("[作業分類]")
     for tea in time_entry_activities:
         print("  [%d]%s" % (tea.id, tea.name))
@@ -1761,7 +1871,7 @@ def output_all_issues_list(ws):
     global g_opt_grouping
     global g_opt_issue_list_type
 
-    print("--------------------------------- Output Issue List(%s) ---------------------------------" % (g_opt_issue_list_type))
+    print_both("--------------------------------- Output Issue List(%s) ---------------------------------" % (g_opt_issue_list_type))
     output_issue_list_format_line(ws)
     row = 3
     if (g_opt_issue_list_type == 'flat'):
@@ -1810,7 +1920,7 @@ def output_user_time(ws):
     else:
         end_day = g_base_day
 
-    print("--------------------------------- Output User Time Entry [%s --- %s] ---------------------------------" % (start_day, end_day))
+    print_both("--------------------------------- Output User Time Entry [%s --- %s] ---------------------------------" % (start_day, end_day))
 
     active_user_list = []
     for project_data in g_target_project_list:
@@ -1893,11 +2003,60 @@ def output_user_time(ws):
 
 
 #/*****************************************************************************/
+#/* 統計データ出力（チケット）                                                */
+#/*****************************************************************************/
+def output_issues_stats(ws, stats):
+    return
+
+
+#/*****************************************************************************/
+#/* 統計データ出力（作業時間）                                                */
+#/*****************************************************************************/
+def output_time_entries_stats(ws, stats):
+    print_both("--------------------------------- Output Time Entry Stats [%s] ---------------------------------" % (ws.title))
+
+    #/* 最初のTimeEntryと指定された開始日を比較して、実際に出力する開始日を決定する */
+    if (g_first_time_entry_date.timestamp < stats.start):
+        start_day = stats.start
+    else:
+        start_day = g_first_time_entry_date.timestamp
+
+    #/* 今日の日付と指定された終了日を比較して、実際に出力する終了日を決定する */
+    if (g_base_day > stats.end):
+        end_day = stats.end
+    else:
+        end_day = g_base_day
+
+
+    return
+
+
+#/*****************************************************************************/
+#/* 統計データ出力                                                            */
+#/*****************************************************************************/
+def output_all_stats(wb):
+    global g_stats_setting_dic
+
+    for key, value in g_stats_setting_dic.items():
+        if (value.target == 'time_entry'):
+            ws_title = '%s_%s' % (key, value.title)
+            output_time_entries_stats(wb.create_sheet(title = ws_title), value)
+        elif (value.target == 'issue'):
+            ws_title = '%s_%s' % (key, value.title)
+            output_issues_stats(wb.create_sheet(title = ws_title), value)
+        else:
+            print('')
+
+    return
+
+
+#/*****************************************************************************/
 #/* 作業時間出力                                                              */
 #/*****************************************************************************/
 def output_all_time_entries(ws):
     global g_time_entry_list
 
+    print_both("--------------------------------- Output All Time Entries ---------------------------------")
     row = 1
     col = 1
     ws.cell(row, col).value = '#'
@@ -1964,8 +2123,9 @@ def output_settings(ws):
     global g_opt_cf_multi_list
     global g_current_user
     global g_opt_issue_list_type
+    global g_stats_setting_dic
 
-    print("--------------------------------- Output Settings ---------------------------------")
+    print_both("--------------------------------- Output Settings ---------------------------------")
 
     row = 1
     ws.cell(row, 1).value = '実行日'
@@ -2065,6 +2225,35 @@ def output_settings(ws):
 
     row += 1
 
+    for key, value in g_stats_setting_dic.items():
+        ws.cell(row, 1).value = '統計データ設定[%d]' % (key)
+        col = 2
+        row += 1
+        ws.cell(row, 1      ).value = '    シート名'
+        ws.cell(row, col    ).value = '%s_%s' % (key, value.title)
+        row += 1
+        ws.cell(row, 1      ).value = '    対象'
+        ws.cell(row, col    ).value = value.target
+        row += 1
+        ws.cell(row, 1      ).value = '    単位'
+        ws.cell(row, col    ).value = value.unit
+        row += 1
+        ws.cell(row, 1      ).value = '    開始'
+        ws.cell(row, col    ).value = value.start
+        row += 1
+        ws.cell(row, 1      ).value = '    終了'
+        ws.cell(row, col    ).value = value.end
+        row += 1
+        ws.cell(row, 1      ).value = '    KEY1'
+        ws.cell(row, col    ).value = value.keys[1]
+        row += 1
+        ws.cell(row, 1      ).value = '    KEY2'
+        ws.cell(row, col    ).value = value.keys[2]
+        row += 1
+        ws.cell(row, 1      ).value = '    KEY3'
+        ws.cell(row, col    ).value = value.keys[3]
+        row += 1
+
     return
 
 #/*****************************************************************************/
@@ -2081,7 +2270,7 @@ def output_id_list(ws):
     global g_enum_activity_dic
     global g_enum_category_dic
 
-    print("--------------------------------- Output ID List ---------------------------------")
+    print_both("--------------------------------- Output ID List ---------------------------------")
 
     row = 1
     col = 1
@@ -2188,7 +2377,7 @@ def output_datas():
     g_user_list           = sorted(g_user_list,           key=lambda ud:    ud.id)
     g_cf_type_list        = sorted(g_cf_type_list,        key=lambda cf:    cf.id)
 
-    print("--------------------------------- Output Redmine Datas ---------------------------------")
+    print_both("--------------------------------- Output Redmine Datas ---------------------------------")
     wb = openpyxl.Workbook()
     ws = wb.worksheets[0]
     ws.title = "チケット一覧"
@@ -2197,6 +2386,7 @@ def output_datas():
     output_id_list(wb.create_sheet(title = "ID一覧"))
     output_settings(wb.create_sheet(title = "設定値"))
     output_user_time(wb.create_sheet(title = "ユーザー作業時間"))
+#   output_all_stats(wb)
     wb.save(g_opt_out_file)
     return
 
@@ -2239,7 +2429,7 @@ def time_entry_check(redmine, is_full_check):
 
     l_subproject = get_subproject_option()
     if (is_full_check):
-        print("--------------------------------- Time Entries Check Full ---------------------------------")
+        print_both("--------------------------------- Time Entries Check Full ---------------------------------")
         for user_data in g_user_list:
             for project_data in g_target_project_list:
                 if (project_data.included):
@@ -2250,7 +2440,7 @@ def time_entry_check(redmine, is_full_check):
     else:
         last_updated = g_latest_time_entry_ts.timestamp.date()
 
-        print("--------------------------------- Time Entries Check onwards %s ---------------------------------" % (last_updated))
+        print_both("--------------------------------- Time Entries Check onwards %s ---------------------------------" % (last_updated))
         for user_data in g_user_list:
             for project_data in g_target_project_list:
                 if (project_data.included):
@@ -2267,7 +2457,7 @@ def time_entry_check(redmine, is_full_check):
 def full_issue_check(redmine):
     global g_filter_limit
 
-    print("--------------------------------- Full Issue Check ---------------------------------")
+    print_both("--------------------------------- Full Issue Check ---------------------------------")
     for project_data in g_target_project_list:
         if (project_data.included):
             continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
@@ -2279,7 +2469,7 @@ def full_issue_check(redmine):
             if (len(issues) == 0):
                 break
 
-            print("--------------------------------- ProjectID : %d, Filter Offset %d ---------------------------------" % (project_data.id, filter_offset))
+            print_both("--------------------------------- ProjectID : %d, Filter Offset %d ---------------------------------" % (project_data.id, filter_offset))
             for issue in issues:
                 issue_data = get_issue_data(issue)
                 issue_data.read_issue_data(issue)
@@ -2298,7 +2488,7 @@ def issue_check(redmine):
     global g_latest_issues_update_ts
 
     last_updated = g_latest_issues_update_ts.timestamp.date()
-    print("--------------------------------- Created / Updated Issue Check ---------------------------------")
+    print_both("--------------------------------- Created / Updated Issue Check ---------------------------------")
     for project_data in g_target_project_list:
         if (project_data.included):
             continue                         #/* 子プロジェクトは親チケットと一緒にfilterされるので、スキップする */
@@ -2311,7 +2501,7 @@ def issue_check(redmine):
             if (len(issues) == 0):
                 break
 
-            print("--------------------------------- ProjectID : %d, Updated onwards %s Filter Offset %d ---------------------------------" % (project_data.id, last_updated, filter_offset))
+            print_both("--------------------------------- ProjectID : %d, Updated onwards %s Filter Offset %d ---------------------------------" % (project_data.id, last_updated, filter_offset))
             for issue in issues:
                 issue_data = get_issue_data(issue)
                 issue_data.read_issue_data(issue)
@@ -2456,7 +2646,7 @@ def read_attr_value(issue_data, attr, value):
 def read_time_entry_list(ws):
     global g_time_entry_list
     global g_latest_time_entry_ts
-    print("--------------------------------- Read Time Entry List! ---------------------------------")
+    print_both("--------------------------------- Read Time Entry List! ---------------------------------")
 
     row = 1
     col = 1
@@ -2534,7 +2724,7 @@ def read_time_entry_list(ws):
 #/* チケット一覧の読み込み                                                    */
 #/*****************************************************************************/
 def read_issue_list(ws):
-    print("--------------------------------- Read Issue List! ---------------------------------")
+    print_both("--------------------------------- Read Issue List! ---------------------------------")
 
     row = 1
     col = 1
@@ -2595,7 +2785,7 @@ def read_id_list(ws):
     global g_current_user_admin
     global g_cf_type_list
 
-    print("--------------------------------- Read ID List! ---------------------------------")
+    print_both("--------------------------------- Read ID List! ---------------------------------")
 
     row = 1
     col = 1
@@ -2668,7 +2858,7 @@ def read_id_list(ws):
 def read_in_file():
     global g_opt_in_file
 
-    print("--------------------------------- Read Input File : %s ---------------------------------" % (g_opt_in_file))
+    print_both("--------------------------------- Read Input File : %s ---------------------------------" % (g_opt_in_file))
     if (g_opt_in_file == ''):
         return
 
