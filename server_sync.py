@@ -13,7 +13,7 @@ g_out_path     = ''
 g_out_file     = ''
 g_filter_ext   =  [r'exe', r'bin']
 g_filter_dir   =  [r'old', r'backup', r'.git', r'.svn']
-g_filter_name  =  [r'^~.*\.xlsx', r'^.* - コピー\.(.+)$']
+g_filter_name  =  [r'^~.*\.(xlsx|xlsm|docx)', r'^.* - コピー\.(.+)$', r'.*Thumbs\.db$']
 g_log_file     = None
 g_opt_backup   = 0
 
@@ -35,17 +35,26 @@ PRE_COL_OFFSET = 10
 #/*****************************************************************************/
 class cFileItem:
     def __init__(self):
-        self.synced           = False
-        self.file_name        = ''
-        self.rel_path         = ''
-        self.update_date      = ''
-        self.update_time      = ''
-        self.size             = 0
-        self.local_updated    = False
-        self.pre_update_date  = ''
-        self.pre_update_time  = ''
-        self.pre_size         = 0
+        self.synced             = False
+        self.file_name          = ''
+        self.rel_path           = ''
 
+        #/* サーバーのファイル情報 */
+        self.update_date        = ''
+        self.update_time        = ''
+        self.size               = 0
+
+        #/* ローカルコピーのファイル情報 */
+        self.local_update_date  = ''
+        self.local_update_time  = ''
+        self.local_size         = 0
+
+        #/* サーバーから取得した際のファイル情報 */
+        self.base_update_date  = ''
+        self.base_update_time  = ''
+        self.base_size         = 0
+
+        self.local_updated    = False
         self.updated_dt       = None
         self.pre_updated_dt   = None
         return
@@ -82,19 +91,19 @@ class cFileItem:
         self.size             = ws.cell(row, col).value
         col += 1
 
+        self.local_update_date  = ws.cell(row, col).value
+        col += 1
+
+        self.local_update_time  = ws.cell(row, col).value
+        col += 1
+
+        if (type(self.local_update_date) is datetime.datetime) and (type(self.local_update_time) is datetime.time):
+            self.local_updated_dt = datetime.datetime.combine(self.local_update_date.date(), self.local_update_time)
+
+        self.local_size         = ws.cell(row, col).value
+        col += 1
+
         self.local_updated    = False
-        col += 1
-
-        self.pre_update_date  = ws.cell(row, col).value
-        col += 1
-
-        self.pre_update_time  = ws.cell(row, col).value
-        col += 1
-
-        if (type(self.pre_update_date) is datetime.datetime) and (type(self.pre_update_time) is datetime.time):
-            self.pre_updated_dt = datetime.datetime.combine(self.pre_update_date.date(), self.pre_update_time)
-
-        self.pre_size         = ws.cell(row, col).value
         col += 1
         return
 
@@ -148,7 +157,7 @@ class cFileInfo:
         self.rel_path    = str(nw_path).replace(self.file_name, '')
         self.rel_path    = self.rel_path.replace(root_path, '')
 
-        stat_info = nw_path.stat()
+        stat_info        = nw_path.stat()
         dt = datetime.datetime.fromtimestamp(stat_info.st_mtime)
         self.date        = dt.date()             #/* 更新日          */
         self.time        = dt.time()             #/* 更新時          */
@@ -324,8 +333,15 @@ def search_target_path(path, level):
             if (file_name.is_dir()):
                 search_target_path(file_name, level + 1)
             else:
-                file_info = cFileInfo(file_name, g_server_path)
-                g_target_list.append(file_info)
+                try:
+                    file_info = cFileInfo(file_name, g_server_path)
+                except FileNotFoundError:
+                    if len(str(file_name)) > 260:
+                        print(f'ファイル[{file_name}]のパスが長すぎます')
+                    else:
+                        print(f'ファイル[{file_name}]が見つかりません')
+                else:
+                    g_target_list.append(file_info)
 
     else:
         print_log("network path is not available!")
@@ -369,14 +385,14 @@ def in_file_list():
         print_log(f'リストファイルをバックアップします [{g_out_file}] -> [{back_up_path}]')
         wb.save(g_out_file.replace(r'.xlsx', r'_' + time_stamp + r'.xlsx'))
 
+    if (wb != None):
+        ws = wb['FileList']
+        g_file_list = cFileListInfo()
+        g_file_list.read_worksheet(ws)
 
-    ws = wb['FileList']
-    g_file_list = cFileListInfo()
-    g_file_list.read_worksheet(ws)
-
-    if (g_file_list.target_path != g_server_path):
-        print(f'同期パスが異なります {g_server_path} vs {g_file_list.target_path}')
-        exit(-1)
+        if (g_file_list.target_path != g_server_path):
+            print(f'同期パスが異なります {g_server_path} vs {g_file_list.target_path}')
+            exit(-1)
 
     return
 
@@ -435,13 +451,17 @@ def out_file_list():
     col += 1
     ws.cell(row, col).value = 'サイズ'
     col += 1
-    ws.cell(row, col).value = 'ローカル'
+    ws.cell(row, col).value = 'ローカル日付'
     col += 1
-    ws.cell(row, col).value = '前回日付'
+    ws.cell(row, col).value = 'ローカル時間'
     col += 1
-    ws.cell(row, col).value = '前回時間'
+    ws.cell(row, col).value = 'ローカルサイズ'
     col += 1
-    ws.cell(row, col).value = '前回サイズ'
+    ws.cell(row, col).value = '取得時日付'
+    col += 1
+    ws.cell(row, col).value = '取得時時間'
+    col += 1
+    ws.cell(row, col).value = '取得時サイズ'
     col += 1
 
     row += 1
@@ -483,9 +503,9 @@ def main():
     global g_out_path
     global g_tgt_dir
     check_command_line_option()
+    make_directory(g_out_path)
     start_time = log_start()
 
-    make_directory(g_out_path)
     in_file_list()
     search_target_path(g_server_path, 0)
     out_file_list()
