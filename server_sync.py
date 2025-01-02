@@ -60,6 +60,11 @@ COL_WIDTH_BASE      = 14
 
 SIZE_RJUST          = 12
 
+INPUT_NO            = 0
+INPUT_YES           = 1
+INPUT_YES_ALL       = 2
+INPUT_NO_ALL        = 3
+
 re_time_stamp       = re.compile(r'([0-9]+_[0-9]+)')
 
 
@@ -745,9 +750,13 @@ def check_key_input(text):
      while(True):
          input_key = input(text + ' (Y or N)')
          if (input_key.upper() == 'Y'):
-             return 1
+             return INPUT_YES
          elif (input_key.upper() == 'N'):
-             return 0
+             return INPUT_NO
+         elif (input_key.upper() == 'YA'):
+             return INPUT_YES_ALL
+         elif (input_key.upper() == 'NA'):
+             return INPUT_NO_ALL
 
 
 #/*****************************************************************************/
@@ -785,12 +794,22 @@ def copy_updated_files():
             if (g_new_file_interactive):
                 action = check_key_input(f'サーバーの新規ファイル : {item.rel_path} {item.file_name}をダウンロードしますか？')
 
-            if (action):
+            if (action == INPUT_YES):
                 print_log(f'Added File     : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                 copy_item_file(item)
-            else:
+            elif (action == INPUT_YES_ALL):
+                print_log(f'Add All        : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                copy_item_file(item)
+                g_new_file_action      = 1
+                g_new_file_interactive = 0
+            elif (action == INPUT_NO):
                 print_log(f'Skip(A)        : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                 item.file_attribute = FILE_SERVER_SKIPPED
+            elif (action == INPUT_NO_ALL):
+                print_log(f'Skip(A) All    : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                item.file_attribute = FILE_SERVER_SKIPPED
+                g_new_file_action      = 0
+                g_new_file_interactive = 0
 
         elif (item.file_attribute == FILE_SAME):
             #/* すでに同期しているファイル */
@@ -804,11 +823,20 @@ def copy_updated_files():
             if (g_update_file_interactive):
                 action = check_key_input(f'サーバーの更新ファイル : {item.rel_path} {item.file_name}をダウンロードしますか？')
 
-            if (action):
+            if (action == INPUT_YES):
                 print_log(f'Updated File   : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                 copy_item_file(item)
-            else:
+            elif (action == INPUT_YES_ALL):
+                print_log(f'Update All     : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                copy_item_file(item)
+                g_update_file_action      = 1
+                g_update_file_interactive = 0
+            elif (action == INPUT_NO):
                 print_log(f'Skip(U)        : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+            elif (action == INPUT_NO_ALL):
+                print_log(f'Skip(U) All    : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                g_update_file_action      = 0
+                g_update_file_interactive = 0
 
         elif (item.file_attribute == FILE_LOCAL_UPDATED):
             #/* ローカル側で更新のあったファイル */
@@ -819,14 +847,18 @@ def copy_updated_files():
             action = g_conflict_file_action
             if (g_conflict_file_interactive):
                 action = check_key_input(f'！コンフリクトファイル！ : {item.rel_path} {item.file_name}を上書き更新しますか？')
-                if (action):
+                if (action == INPUT_YES):
                     action = check_key_input(f'ローカル変更ファイルが上書きされますが、間違いないですか？')
 
-            if (action):
+            if (action == INPUT_YES) or (action == INPUT_YES_ALL):
                 print_log(f'Overwrite File : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                 copy_item_file(item)
-            else:
+            elif (action == INPUT_NO):
                 print_log(f'Skip(C)        : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+            elif (action == INPUT_NO_ALL):
+                print_log(f'Skip(C) All    : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                g_conflict_file_action      = 0
+                g_conflict_file_interactive = 0
 
         elif (item.file_attribute == FILE_LOCAL_ONLY):
             #/* ローカルのみに存在するファイル */
@@ -837,15 +869,24 @@ def copy_updated_files():
             if (item.local_file):
                 local_dts = item.local_file.get_dts().get_print_str()
 
-                action = g_deleted_file_interactive
+                action = g_deleted_file_action
                 if (g_deleted_file_interactive):
                     action = check_key_input(f'サーバーで削除されたファイル : {item.rel_path} {item.file_name}を削除しますか？')
 
-                if (action):
+                if (action == INPUT_YES):
                     print_log(f'Delete         : {local_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                     os.remove(g_tgt_dir + item.rel_path + item.file_name)
-                else:
+                elif (action == INPUT_YES_ALL):
+                    print_log(f'Delete All     : {local_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                    os.remove(g_tgt_dir + item.rel_path + item.file_name)
+                    g_deleted_file_action = 1
+                    g_deleted_file_interactive = 0
+                elif (action == INPUT_NO):
                     print_log(f'Skip(D)        : {local_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                elif (action == INPUT_NO_ALL):
+                    print_log(f'Skip(D)  All   : {local_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                    g_deleted_file_action = 0
+                    g_deleted_file_interactive = 0
             else:
                 base_dts = item.base_dts.get_print_str()
                 print_log(f'Already Delete : {base_dts} {g_tgt_dir + item.rel_path + item.file_name}')
@@ -857,11 +898,20 @@ def copy_updated_files():
             if (g_deleted_local_interactive):
                 action = check_key_input(f'ローカルで削除したファイル : {item.rel_path} {item.file_name}を復元しますか？')
 
-            if (action):
+            if (action == INPUT_YES):
                 print_log(f'Missing File   : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                 copy_item_file(item)
-            else:
+            elif (action == INPUT_YES_ALL):
+                print_log(f'Missing All    : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                copy_item_file(item)
+                g_deleted_local_action      = 1
+                g_deleted_local_interactive = 0
+            elif (action == INPUT_NO):
                 print_log(f'Skip(M)        : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+            elif (action == INPUT_NO_ALL):
+                print_log(f'Skip(M) All    : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                g_deleted_local_action      = 0
+                g_deleted_local_interactive = 0
 
 
     return
