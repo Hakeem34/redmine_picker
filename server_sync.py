@@ -734,12 +734,18 @@ def copy_item_file(item):
     make_directory(g_tgt_dir + item.rel_path)
     local_path = g_tgt_dir + item.rel_path + item.file_name
 #   print_log(f'copy new file {local_path}')
-    shutil.copy2(item.server_file.abs_path,  local_path)
 
-    path = pathlib.WindowsPath(local_path)
-    local_file_info = cFileInfo(path, g_tgt_dir)
-    item.set_local_file(local_file_info)
-    item.set_base_update(local_file_info.get_dts())
+    try:
+        shutil.copy2(item.server_file.abs_path,  local_path)
+        path = pathlib.WindowsPath(local_path)
+        local_file_info = cFileInfo(path, g_tgt_dir)
+        item.set_local_file(local_file_info)
+        item.set_base_update(local_file_info.get_dts())
+    except FileNotFoundError:
+        print_log(f"{item.server_file.abs_path}が見つかりませんでした")
+    else:
+        print_log(f"{item.server_file.abs_path}のコピーに失敗しました")
+
     return
 
 
@@ -850,9 +856,14 @@ def copy_updated_files():
                 if (action == INPUT_YES):
                     action = check_key_input(f'ローカル変更ファイルが上書きされますが、間違いないですか？')
 
-            if (action == INPUT_YES) or (action == INPUT_YES_ALL):
+            if (action == INPUT_YES):
                 print_log(f'Overwrite File : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
                 copy_item_file(item)
+            elif (action == INPUT_YES_ALL):
+                print_log(f'Overwrite All  : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
+                copy_item_file(item)
+                g_conflict_file_action      = 1
+                g_conflict_file_interactive = 0
             elif (action == INPUT_NO):
                 print_log(f'Skip(C)        : {server_dts} {g_tgt_dir + item.rel_path + item.file_name}')
             elif (action == INPUT_NO_ALL):
