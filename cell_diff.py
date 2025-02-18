@@ -10,8 +10,6 @@ import openpyxl
 import unicodedata
 
 
-from pathlib  import Path
-from redminelib import Redmine
 g_left_file  = ''
 g_right_file = ''
 g_out_path   = '.'
