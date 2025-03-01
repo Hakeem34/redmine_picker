@@ -743,7 +743,7 @@ def copy_item_file(item):
         item.set_base_update(local_file_info.get_dts())
     except FileNotFoundError:
         print_log(f"{item.server_file.abs_path}が見つかりませんでした")
-    else:
+    except:
         print_log(f"{item.server_file.abs_path}のコピーに失敗しました")
 
     return
