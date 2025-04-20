@@ -1625,8 +1625,24 @@ def check_user_info(redmine):
     print_both("--------------------------------- Check User Datas ---------------------------------")
     l_subproject = get_subproject_option()
 
+    get_all_user = g_current_user_admin
+
     #/* 全ユーザー情報を取得 */
-    if (g_current_user_admin):
+    try:
+        user_ids = [u.id for u in redmine.user.all()]
+    except Exception as e:
+        print(f"redmine.user.all()を取得できません: {e}")
+        get_all_user = 0
+
+    if (get_all_user):
+        user_ids = [u.id for u in redmine.user.all()]
+        try:
+            users = redmine.user.all()
+            for user in users:
+                print(f"{user.id}: {user.login}")
+        except Exception as e:
+            print(f"エラーが発生しました: {e}")
+
         users = redmine.user.all()
         for user in users:
             user_name = enc_dec_str(user.lastname) + ' ' + enc_dec_str(user.firstname)
