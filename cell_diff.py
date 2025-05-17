@@ -14,6 +14,9 @@ g_left_file  = ''
 g_right_file = ''
 g_out_path   = '.'
 
+
+DIFF_TEXT_LENGTH = 72
+
 #/*****************************************************************************/
 #/* 全角文字の数をカウント                                                    */
 #/*****************************************************************************/
@@ -53,6 +56,8 @@ def check_command_line_option():
         exit(0)
 
     g_out_path = os.path.dirname(g_right_file)
+    if (g_out_path == ''):
+        g_out_path = '.'
     return
 
 
@@ -131,6 +136,51 @@ def get_disp_string(text, width):
 
 
 #/*****************************************************************************/
+#/* セル位置が有効範囲内かの判定（0以下の判定はしません）                     */
+#/*****************************************************************************/
+def is_out_of_bounds(max_row, max_col, row, col):
+    if row > max_row:
+#       print("Out of Bounds! max_row : [%d] row : [%d]" % (max_row, row))
+        return True
+
+    if col > max_col:
+#       print("Out of Bounds! max_col : [%d] col : [%d]" % (max_col, col))
+        return True
+
+#   print("In Bounds! max[%d, %d],  row, col : [%d, %d]" % (max_row, max_col, row, col))
+    return False
+
+
+#/*****************************************************************************/
+#/* 表示用のテキスト比較                                                      */
+#/*****************************************************************************/
+def get_diff_text(text_l, text_r):
+    lines_l = text_l.split("\n")
+    lines_r = text_r.split("\n")
+
+    least_index = min([len(lines_l), len(lines_r)])
+    for index in range(0, least_index):
+#       print(f'  index:{index}, {lines_l[index]} vs {lines_r[index]}')
+        if (lines_l[index] != lines_r[index]):
+            val_l = get_disp_string(lines_l[index], DIFF_TEXT_LENGTH)
+            val_r = get_disp_string(lines_r[index], DIFF_TEXT_LENGTH)
+#           print(f'diff in index:{index}, {val_l} vs {val_r}')
+            return f'[{val_l}] vs [{val_r}]'
+
+    if (len(lines_l) > len(lines_r)):
+        val_l = get_disp_string(lines_l[len(lines_r)], DIFF_TEXT_LENGTH)
+        val_r = get_disp_string('',                        DIFF_TEXT_LENGTH)
+    elif (len(lines_l) < len(lines_r)):
+        val_l = get_disp_string('',                        DIFF_TEXT_LENGTH)
+        val_r = get_disp_string(lines_r[len(lines_l)], DIFF_TEXT_LENGTH)
+    else:
+        val_l = get_disp_string('',                        DIFF_TEXT_LENGTH)
+        val_r = get_disp_string('',                        DIFF_TEXT_LENGTH)
+
+    return f'[{val_l}] vs [{val_r}]'
+
+
+#/*****************************************************************************/
 #/* シートの比較                                                              */
 #/*****************************************************************************/
 def check_lr_sheets(ws_l, ws_r):
@@ -142,35 +192,38 @@ def check_lr_sheets(ws_l, ws_r):
     max_col_r = ws_r.max_column
 
     if (max_row_l == max_row_r) and (max_col_l == max_col_r):
-        print("    max_row : %d, max_col = %d" % (max_row_r, max_col_r))
-        for row in range(1, max_row_l):
-            for col in range(1, max_col_l):
+        #/* 行、列の数が一致している場合 */
+        print("    行列一致   max_row : %d, max_col = %d" % (max_row_r, max_col_r))
+        for row in range(1, max_row_l + 1):
+            for col in range(1, max_col_l + 1):
                 val_l = ws_l.cell(row, col).value
                 val_r = ws_r.cell(row, col).value
                 if (val_l != val_r):
-                    val_l = get_disp_string(str(val_l), 40)
-                    val_r = get_disp_string(str(val_r), 40)
-                    print("      差異(%4d, %4d) : [%s] vs [%s]" % (row, col, val_l, val_r))
+                    diff_text = get_diff_text(str(val_l), str(val_r))
+                    print("      差異(%4d, %4d) : %s" % (row, col, diff_text))
     else:
-        print("    max_row : [%d] vs [%d], max_col : [%d] vs [%d]" % (max_row_l, max_row_r, max_col_l, max_col_r))
-        if (max_row_l > max_row_r):
-            max_row = max_row_r
-        else:
-            max_row = max_row_l
+        #/* 行、列の数が一致していない場合 */
+        print("    行列不一致 max_row : [%d] vs [%d], max_col : [%d] vs [%d]" % (max_row_l, max_row_r, max_col_l, max_col_r))
 
-        if (max_col_l > max_col_r):
-            max_col = max_col_r
-        else:
-            max_col = max_col_l
+        max_row = max([max_row_l, max_row_r])
+        max_col = max([max_col_l, max_col_r])
 
-        for row in range(1, max_row):
-            for col in range(1, max_col):
+        for row in range(1, max_row + 1):
+            for col in range(1, max_col + 1):
                 val_l = ws_l.cell(row, col).value
                 val_r = ws_r.cell(row, col).value
                 if (val_l != val_r):
-                    val_l = get_disp_string(str(val_l), 40)
-                    val_r = get_disp_string(str(val_r), 40)
-                    print("      差異(%4d, %4d) : [%s] vs [%s]" % (row, col, val_l, val_r))
+                    ob_l  = is_out_of_bounds(max_row_l, max_col_l, row, col)
+                    ob_r  = is_out_of_bounds(max_row_r, max_col_r, row, col)
+
+                    diff_text = get_diff_text(str(val_l), str(val_r))
+
+                    if (ob_l):
+                        print("      右増(%4d, %4d) : %s" % (row, col, diff_text))
+                    elif (ob_r):
+                        print("      左増(%4d, %4d) : %s" % (row, col, diff_text))
+                    else:
+                        print("      差異(%4d, %4d) : %s" % (row, col, diff_text))
 
     return
 
