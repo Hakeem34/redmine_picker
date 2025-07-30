@@ -2732,6 +2732,9 @@ def read_time_entry_list(ws):
             append_wo_duplicate(project_data.active_users, te.user)
         g_first_time_entry_date.former_timestamp(te.spent_on)
 
+        issue_data = get_issue_data_by_id(te.issue_id)
+        issue_data.time_entries.append(te)
+
         row += 1
 
     return
