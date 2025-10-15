@@ -87,12 +87,12 @@ def check_command_line_option():
         elif (arg == '-o'):
             try:
                 g_output = sys.argv.pop(0)
-                if (not g_template.lower().endswith('.xlsx')):
+                if (not g_output.lower().endswith('.xlsx')):
                     print(f'出力ファイル名を指定してください')
                     exit(-1)
 
             except Exception as e:
-                print('テンプレートファイルを指定してください')
+                print(f'出力ファイル名を指定してください')
                 exit(-1)
         elif (arg == '-png'):
             g_on_memory = False
@@ -189,10 +189,14 @@ def output_excel(target_xlsx, images):
     ws = wb.active
     row = ROW_OFFSET
     col = openpyxl.utils.get_column_letter(COL_OFFSET)
+    page = g_start_page
     for img in images:
+        ws.cell(row, 1).value = f'Page {page}'
+        row += 1
         ws.add_image(img, f"{col}{row}")
         row_height = int(img.height / 25) + 1
         row += (row_height + ROW_PADDING)
+        page += 1
 
     wb.save(g_output)
     return
