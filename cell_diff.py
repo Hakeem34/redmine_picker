@@ -16,6 +16,36 @@ g_right_file     = ''
 g_out_path       = '.'
 g_shape_check    = True
 g_diff_lib       = True
+g_link_list      = True
+g_log_path       = ''
+g_diff_list      = []
+g_sheets_order   = []
+
+
+DIFF_TYPE_SHEET       = 0
+DIFF_TYPE_LINE        = 1
+DIFF_TYPE_CELL        = 2
+DIFF_TYPE_SHAPE_INFO  = 3
+DIFF_TYPE_SHAPE_TEXT  = 4
+
+DIFF_DIR_DIFF         = 0
+DIFF_DIR_ADD          = 1
+DIFF_DIR_DEL          = 2
+
+
+FILL_GRAY = openpyxl.styles.PatternFill(patternType='solid',fgColor='7F7F7F', bgColor='7F7F7F')
+
+
+class cDiffInfo:
+    def __init__(self):
+        self.type        = 0
+        self.dir         = 0
+        self.sheet_name  = ''
+        self.cell_left   = ''
+        self.cell_right  = ''
+        self.value_left  = ''
+        self.value_right = ''
+        return
 
 
 if g_shape_check:
@@ -71,10 +101,12 @@ class cShapeInfo:
             val_r = another.get_geom_text()
             pre_text = get_disp_string(f'      図形差 ID[{self.id}]', PRE_TEXT_LENGTH)
             print(f'{pre_text} : [{val_l}] vs [{val_r}]')
+            add_diff_info(DIFF_TYPE_SHAPE_INFO, DIFF_DIR_DIFF, self.sheet, f'{self_col}{self.row}', val_l, f'{another_col}{another.row}', val_r)
 
         if (self.text != another.text):
             pre_text = get_disp_string(f'      Text差 ID[{self.id}]({self_col}{self.row})', PRE_TEXT_LENGTH)
             print(f'{pre_text} : [{self.get_diff_text()}] vs [{another.get_diff_text()}]')
+            add_diff_info(DIFF_TYPE_SHAPE_TEXT, DIFF_DIR_DIFF, self.sheet, f'{self_col}{self.row}', self.text, f'{another_col}{another.row}', another.text)
 
 
 
@@ -128,12 +160,13 @@ def check_command_line_option():
 #/*****************************************************************************/
 def log_start():
     global g_out_path
+    global g_log_path
 
     now = datetime.datetime.now()
 
     time_stamp = now.strftime('%Y%m%d_%H%M%S')
-    log_path = g_out_path + '\\cell_diff_' + time_stamp + '.txt'
-    log_file = open(log_path, "w")
+    g_log_path = g_out_path + '\\cell_diff_' + time_stamp + '.txt'
+    log_file = open(g_log_path, "w")
     sys.stdout = log_file
 
     start_time = time.perf_counter()
@@ -245,6 +278,9 @@ def get_diff_text(text_l, text_r):
     return f'[{val_l}] vs [{val_r}]'
 
 
+#/*****************************************************************************/
+#/* 行単位の読み出し                                                          */
+#/*****************************************************************************/
 def read_ws_lines(ws):
     lines = []
     for row in ws.iter_rows(values_only=True):
@@ -252,6 +288,36 @@ def read_ws_lines(ws):
         line = "\t".join("" if v is None else str(v) for v in row)
         lines.append(line)
     return lines
+
+
+#/*****************************************************************************/
+#/* 差分情報の登録                                                            */
+#/*****************************************************************************/
+def add_diff_info(type, dir, sheet_name, cell_left, val_left, cell_right, val_right):
+    global g_diff_list
+    global g_sheets_order
+
+    append_wo_duplicate(g_sheets_order, sheet_name)
+    diff_info = cDiffInfo()
+    diff_info.type        = type
+    diff_info.dir        = dir
+    diff_info.sheet_name  = sheet_name
+    if cell_left:
+        diff_info.cell_left   = cell_left
+        diff_info.value_left  = val_left
+    else:
+        diff_info.cell_left   = None
+        diff_info.value_left  = None
+
+    if cell_right:
+        diff_info.cell_right  = cell_right
+        diff_info.value_right = val_right
+    else:
+        diff_info.cell_right  = None
+        diff_info.value_right = None
+
+    g_diff_list.append(diff_info)
+    return
 
 
 #/*****************************************************************************/
@@ -306,31 +372,57 @@ def check_lr_sheets_ex(ws_l, ws_r):
     for row in range(1, max_row + 1):
 
         if row - left_offset in left_add_rows:
+            #/* 左側にしかない行 */
+            row_left_only = row - left_offset
+            row_right = row - right_offset
             right_offset += 1
-#           print(f'[{row}]right_offset add : {right_offset}')
+#           print(f'[{row_left_only}]right_offset add : {right_offset}')
+            all_none = True
             for col in range(1, max_col + 1):
-                col_letter = openpyxl.utils.get_column_letter(col)
-                val_l = ws_l.cell(row - left_offset, col).value
-                val_r = "None"
-                pre_text = get_disp_string(f'      行削除({col_letter}{row})', PRE_TEXT_LENGTH)
-                diff_text = get_diff_text(str(val_l), str(val_r))
-                print(f'{pre_text} : {diff_text}')
+                if (ws_l.cell(row_left_only, col).value != None):
+                    col_letter = openpyxl.utils.get_column_letter(col)
+                    val_l = ws_l.cell(row_left_only, col).value
+                    val_r = "None"
+                    pre_text = get_disp_string(f'      行削除({col_letter}{row_left_only})', PRE_TEXT_LENGTH)
+                    diff_text = get_diff_text(str(val_l), str(val_r))
+                    print(f'{pre_text} : {diff_text}')
+                    add_diff_info(DIFF_TYPE_LINE, DIFF_DIR_DEL, ws_l.title, f'{col_letter}{row_left_only}', val_l, f'{col_letter}{row_right}', None)
+                    all_none = False
+
+            if all_none:
+                pre_text = get_disp_string(f'      空行削除(A{row_left_only})', PRE_TEXT_LENGTH)
+                print(f'{pre_text} : ')
+                add_diff_info(DIFF_TYPE_LINE, DIFF_DIR_DEL, ws_l.title, f'A{row_left_only}', None, None, None)
 
         elif row - right_offset in right_add_rows:
+            #/* 右側にしかない行 */
+            row_right_only = row - right_offset
+            row_left       = row - left_offset
             left_offset += 1
-#           print(f'[{row}]left_offset add : {left_offset}')
+#           print(f'[{row_right_only}]left_offset add : {left_offset}')
+            all_none = True
             for col in range(1, max_col + 1):
-                col_letter = openpyxl.utils.get_column_letter(col)
-                val_l = "None"
-                val_r = ws_r.cell(row - right_offset, col).value
-                pre_text = get_disp_string(f'      行追加({col_letter}{row})', PRE_TEXT_LENGTH)
-                diff_text = get_diff_text(str(val_l), str(val_r))
-                print(f'{pre_text} : {diff_text}')
+                if (ws_r.cell(row_right_only, col).value != None):
+                    col_letter = openpyxl.utils.get_column_letter(col)
+                    val_l = "None"
+                    val_r = ws_r.cell(row_right_only, col).value
+                    pre_text = get_disp_string(f'      行追加({col_letter}{row_right_only})', PRE_TEXT_LENGTH)
+                    diff_text = get_diff_text(str(val_l), str(val_r))
+                    print(f'{pre_text} : {diff_text}')
+                    add_diff_info(DIFF_TYPE_LINE, DIFF_DIR_ADD, ws_l.title, f'{col_letter}{row_left}', None, f'{col_letter}{row_right_only}', val_r)
+                    all_none = False
+
+            if all_none:
+                pre_text = get_disp_string(f'      空行追加(A{row_right_only})', PRE_TEXT_LENGTH)
+                print(f'{pre_text} : ')
+                add_diff_info(DIFF_TYPE_LINE, DIFF_DIR_ADD, ws_l.title, None, None, f'A{row_right_only}', None)
 
         else:
             for col in range(1, max_col + 1):
-                val_l = ws_l.cell(row - left_offset, col).value
-                val_r = ws_r.cell(row - right_offset, col).value
+                row_left  = row - left_offset
+                row_right = row - right_offset
+                val_l = ws_l.cell(row_left,  col).value
+                val_r = ws_r.cell(row_right, col).value
                 if (val_l != val_r):
                     ob_l  = is_out_of_bounds(max_row_l, max_col_l, row, col)
                     ob_r  = is_out_of_bounds(max_row_r, max_col_r, row, col)
@@ -339,15 +431,20 @@ def check_lr_sheets_ex(ws_l, ws_r):
 
                     col_letter = openpyxl.utils.get_column_letter(col)
                     if (ob_l):
-                        pre_text = get_disp_string(f'      右増({col_letter}{row})', PRE_TEXT_LENGTH)
+                        pre_text = get_disp_string(f'      右増({col_letter}{row_left})', PRE_TEXT_LENGTH)
+                        dir      = DIFF_DIR_ADD
                     elif (ob_r):
-                        pre_text = get_disp_string(f'      左増({col_letter}{row})', PRE_TEXT_LENGTH)
+                        pre_text = get_disp_string(f'      左増({col_letter}{row_right})', PRE_TEXT_LENGTH)
+                        dir      = DIFF_DIR_DEL
                     else:
-                        pre_text = get_disp_string(f'      差異({col_letter}{row})', PRE_TEXT_LENGTH)
+                        pre_text = get_disp_string(f'      差異({col_letter}{row_left} - {col_letter}{row_right})', PRE_TEXT_LENGTH)
+                        dir      = DIFF_DIR_DIFF
 
                     print(f'{pre_text} : {diff_text}')
+#                   print(f'{col_letter}{row_left} vs {col_letter}{row_right}')
+                    add_diff_info(DIFF_TYPE_CELL, dir, ws_l.title, f'{col_letter}{row_left}', val_l, f'{col_letter}{row_right}', val_r)
                 else:
-#                   print(f'left[{row - left_offset}] == right[{row - right_offset}]')
+#                   print(f'left[{row_left}] == right[{row_right}]')
                     pass
 
     return
@@ -381,6 +478,7 @@ def check_lr_sheets(ws_l, ws_r):
                     col_letter = openpyxl.utils.get_column_letter(col)
                     pre_text = get_disp_string(f'      差異({col_letter}{row})', PRE_TEXT_LENGTH)
                     diff_list.append(f'{pre_text} : {diff_text}')
+                    add_diff_info(DIFF_TYPE_CELL, DIFF_DIR_DIFF, ws_l.title, f'{col_letter}{row}', val_l, f'{col_letter}{row}', val_r)
 
         if len(diff_list):
             for text in diff_list:
@@ -406,12 +504,16 @@ def check_lr_sheets(ws_l, ws_r):
                     col_letter = openpyxl.utils.get_column_letter(col)
                     if (ob_l):
                         pre_text = get_disp_string(f'      右増({col_letter}{row})', PRE_TEXT_LENGTH)
+                        dir      = DIFF_DIR_ADD
                     elif (ob_r):
                         pre_text = get_disp_string(f'      左増({col_letter}{row})', PRE_TEXT_LENGTH)
+                        dir      = DIFF_DIR_DEL
                     else:
                         pre_text = get_disp_string(f'      差異({col_letter}{row})', PRE_TEXT_LENGTH)
+                        dir      = DIFF_DIR_DIFF
 
                     print(f'{pre_text} : {diff_text}')
+                    add_diff_info(DIFF_TYPE_CELL, dir, ws_l.title, f'{col_letter}{row}', val_l, f'{col_letter}{row}', val_r)
 
 
     return
@@ -452,8 +554,10 @@ def check_lr_shapes(sheet, shape_l, shape_r):
             geom_text = l_info.get_geom_text()
             diff_text = l_info.get_diff_text()
             print(f'{pre_text} : [{geom_text}] vs [{NONE_DATA_TEXT}]')
+            add_diff_info(DIFF_TYPE_SHAPE_INFO, DIFF_DIR_DEL, l_info.sheet, f'{openpyxl.utils.get_column_letter(l_info.col)}{l_info.row}', geom_text, None, None)
             if (l_info.text != ''):
                 print(f'{pre_text} : [{diff_text}] vs [{NONE_DATA_TEXT}]')
+                add_diff_info(DIFF_TYPE_SHAPE_TEXT, DIFF_DIR_DEL, l_info.sheet, f'{openpyxl.utils.get_column_letter(l_info.col)}{l_info.row}', l_info.text, None, None)
 
     for r_info in shape_info_r:
         match = False
@@ -467,8 +571,10 @@ def check_lr_shapes(sheet, shape_l, shape_r):
             geom_text = r_info.get_geom_text()
             diff_text = r_info.get_diff_text()
             print(f'{pre_text} : [{NONE_DATA_TEXT}] vs [{geom_text}]')
+            add_diff_info(DIFF_TYPE_SHAPE_INFO, DIFF_DIR_ADD, r_info.sheet, None, None, f'{openpyxl.utils.get_column_letter(r_info.col)}{r_info.row}', geom_text)
             if (r_info.text != ''):
                 print(f'{pre_text} : [{NONE_DATA_TEXT}] vs [{diff_text}]')
+                add_diff_info(DIFF_TYPE_SHAPE_TEXT, DIFF_DIR_ADD, r_info.sheet, None, None, f'{openpyxl.utils.get_column_letter(r_info.col)}{r_info.row}', r_info.text)
 
 
     return
@@ -564,6 +670,19 @@ def parse_shape_xml(workbook_path):
     return shape_list_dic
 
 
+
+#/*****************************************************************************/
+#/* Listへの重複無し追加                                                      */
+#/*****************************************************************************/
+def append_wo_duplicate(list, item):
+    if (item in list):
+        return
+
+    list.append(item)
+    return
+
+
+
 #/*****************************************************************************/
 #/* ブックの比較                                                              */
 #/*****************************************************************************/
@@ -580,19 +699,246 @@ def check_lr_books():
         shape_r = parse_shape_xml(g_right_file)
 
 
+    left_sheets  = []
     for ws_l in wb_l.worksheets:
-        for ws_r in wb_r.worksheets:
-            if (ws_l.title == ws_r.title):
-#               print("title : %s" % ws_r.title)
-                if g_diff_lib:
-                    check_lr_sheets_ex(ws_l, ws_r)
+        left_sheets.append(ws_l.title)
+
+    right_sheets = []
+    for ws_r in wb_r.worksheets:
+        right_sheets.append(ws_r.title)
+
+    left_only  = set(left_sheets)  - set(right_sheets)
+    right_only = set(right_sheets) - set(left_sheets)
+    l_sheet_count = 0
+    for ws_l in wb_l.worksheets:
+        if ws_l.title in left_only:
+            print("  左のみシート : [%s]" % (ws_l.title))
+            print('')
+            add_diff_info(DIFF_TYPE_SHEET, DIFF_DIR_DEL, ws_l.title, None, None, None, None)
+        else:
+            r_sheet_count = 0
+            for ws_r in wb_r.worksheets:
+                if ws_r.title in right_only:
+                    if (l_sheet_count == r_sheet_count):
+                        print("  右のみシート : [%s]" % (ws_r.title))
+                        print('')
+                        add_diff_info(DIFF_TYPE_SHEET, DIFF_DIR_ADD, ws_r.title, None, None, None, None)
+                        right_only.remove(ws_r.title)
+                elif (ws_l.title == ws_r.title):
+#                   print("title : %s" % ws_r.title)
+                    if g_diff_lib:
+                        check_lr_sheets_ex(ws_l, ws_r)
+                    else:
+                        check_lr_sheets(ws_l, ws_r)
+
+                    if g_shape_check:
+                        check_lr_shapes(ws_r.title, shape_l, shape_r)
+                    print('')
+
+                r_sheet_count += 1
+        l_sheet_count += 1
+
+    for title in right_only:
+        print("  右のみシート : [%s]" % (title))
+        print('')
+        add_diff_info(DIFF_TYPE_SHEET, DIFF_DIR_ADD, title, None, None, None, None)
+    return
+
+
+#/*****************************************************************************/
+#/* 比較結果、リンクシートの出力                                              */
+#/*****************************************************************************/
+def output_link_list():
+    global g_left_file
+    global g_right_file
+    global g_log_path
+    global g_diff_list
+    global g_sheets_order
+
+    excel_path = g_log_path.replace('.txt', '.xlsx')
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = '差異'
+    ws.cell(2,2).value = 'ファイル'
+    ws.cell(2,4).value = g_left_file
+    ws.column_dimensions['A'].width = 2
+    ws.column_dimensions['E'].width = 100
+    ws.cell(2,6).value = g_right_file
+    ws.column_dimensions['G'].width = 100
+    ws.cell(3,2).value = 'シート'
+    ws.cell(3,3).value = '内容'
+    ws.cell(3,4).value = '位置'
+    ws.cell(3,5).value = '内容'
+    ws.cell(3,6).value = '位置'
+    ws.cell(3,7).value = '内容'
+
+    row = 4
+    for sheet in g_sheets_order:
+        for diff in [diff_info for diff_info in g_diff_list if diff_info.sheet_name == sheet]:
+#           print(f'sheet : {diff.sheet_name}')
+            col = 2
+            ws.cell(row, col).value = sheet
+            col += 1
+            if (diff.type == DIFF_TYPE_CELL):
+                if (diff.dir == DIFF_DIR_ADD):
+                    ws.cell(row, col).value = 'セル追加'
+                    col += 1
+                elif (diff.dir == DIFF_DIR_DEL):
+                    ws.cell(row, col).value = 'セル削除'
+                    col += 1
                 else:
-                    check_lr_sheets(ws_l, ws_r)
+                    ws.cell(row, col).value = 'セル差異'
+                    col += 1
 
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.cell_left}")'
+                col += 1
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.value_left}")'
+                col += 1
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.cell_right}")'
+                col += 1
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.value_right}")'
+                col += 1
+            elif (diff.type == DIFF_TYPE_LINE):
+                if (diff.dir == DIFF_DIR_ADD):
+                    ws.cell(row, col).value = '行追加'
+                    col += 1
+                elif (diff.dir == DIFF_DIR_DEL):
+                    ws.cell(row, col).value = '行削除'
+                    col += 1
+                else:
+                    print(f'something wrong with diff dir! : {diff.dir}')
+                    exit(-1)
 
-                if g_shape_check:
-                    check_lr_shapes(ws_r.title, shape_l, shape_r)
-                print('')
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.cell_left}")'
+                col += 1
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.value_left}")'
+                col += 1
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.cell_right}")'
+                col += 1
+                ws.cell(row, col).value = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.value_right}")'
+                col += 1
+            elif (diff.type == DIFF_TYPE_SHAPE_INFO):
+                if (diff.dir == DIFF_DIR_ADD):
+                    ws.cell(row, col).value = '図形追加'
+                    col += 1
+                    cell_l = None
+                    val_l  = None
+                    cell_r = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.cell_right}")'
+                    val_r  = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.value_right}")'
+                elif (diff.dir == DIFF_DIR_DEL):
+                    ws.cell(row, col).value = '図形削除'
+                    col += 1
+                    cell_l = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.cell_left}")'
+                    val_l  = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.value_left}")'
+                    cell_r = None
+                    val_r  = None
+                else:
+                    ws.cell(row, col).value = '図形差異'
+                    col += 1
+                    cell_l = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.cell_left}")'
+                    val_l  = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.value_left}")'
+                    cell_r = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.cell_right}")'
+                    val_r  = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.value_right}")'
+
+                if cell_l:
+                    ws.cell(row, col).value = cell_l
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+
+                if val_l:
+                    ws.cell(row, col).value = val_l
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+
+                if cell_r:
+                    ws.cell(row, col).value = cell_r
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+
+                if val_r:
+                    ws.cell(row, col).value = val_r
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+            elif (diff.type == DIFF_TYPE_SHAPE_TEXT):
+                if (diff.dir == DIFF_DIR_ADD):
+                    ws.cell(row, col).value = '図Text追加'
+                    col += 1
+                    cell_l = None
+                    val_l  = None
+                    cell_r = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.cell_right}")'
+                    val_r  = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.value_right}")'
+                elif (diff.dir == DIFF_DIR_DEL):
+                    ws.cell(row, col).value = '図Text削除'
+                    col += 1
+                    cell_l = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.cell_left}")'
+                    val_l  = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.value_left}")'
+                    cell_r = None
+                    val_r  = None
+                else:
+                    ws.cell(row, col).value = '図Text差異'
+                    col += 1
+                    cell_l = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.cell_left}")'
+                    val_l  = f'=HYPERLINK("[{g_left_file}]{sheet}!{diff.cell_left}", "{diff.value_left}")'
+                    cell_r = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.cell_right}")'
+                    val_r  = f'=HYPERLINK("[{g_right_file}]{sheet}!{diff.cell_right}", "{diff.value_right}")'
+
+                if cell_l:
+                    ws.cell(row, col).value = cell_l
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+
+                if val_l:
+                    ws.cell(row, col).value = val_l
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+
+                if cell_r:
+                    ws.cell(row, col).value = cell_r
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+
+                if val_r:
+                    ws.cell(row, col).value = val_r
+                else:
+                    ws.cell(row, col).fill  = FILL_GRAY
+                col += 1
+            elif (diff.type == DIFF_TYPE_SHEET):
+                if (diff.dir == DIFF_DIR_ADD):
+                    ws.cell(row, col).value = 'シート追加'
+                    col += 1
+                    ws.cell(row, col).fill  = FILL_GRAY
+                    col += 1
+                    ws.cell(row, col).fill  = FILL_GRAY
+                    col += 1
+                    ws.cell(row, col).value = f'=HYPERLINK("[{g_right_file}]{sheet}!A1", "A1")'
+                    col += 1
+                    ws.cell(row, col).value = f'=HYPERLINK("[{g_right_file}]{sheet}!A1", "追加されたシート")'
+                    col += 1
+                else:
+                    ws.cell(row, col).value = 'シート削除'
+                    col += 1
+                    ws.cell(row, col).value = f'=HYPERLINK("[{g_left_file}]{sheet}!A1", "A1")'
+                    col += 1
+                    ws.cell(row, col).value = f'=HYPERLINK("[{g_left_file}]{sheet}!A1", "削除されたシート")'
+                    col += 1
+                    ws.cell(row, col).fill  = FILL_GRAY
+                    col += 1
+                    ws.cell(row, col).fill  = FILL_GRAY
+                    col += 1
+            else:
+                print(f'something wrong with diff type! : {diff.type}')
+                exit(-1)
+
+            row += 1
+
+    wb.save(excel_path)
     return
 
 
@@ -607,6 +953,8 @@ def main():
 #   print("TEST1:%s" % (get_disp_string("あいうえおかきくけこ", 10)))
 #   print("TEST1:%s" % (get_disp_string("あ\nいうえおかきくけこ", 10)))
     check_lr_books()
+    if g_link_list:
+        output_link_list()
 
     log_end(start_time)
     return
