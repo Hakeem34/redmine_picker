@@ -10,16 +10,25 @@ import openpyxl
 import unicodedata
 from collections import defaultdict
 from difflib import SequenceMatcher
+import win32com.client
+
+
+
+RE_FILE_SHEET = re.compile(r'(.*)(\.xlsx|\.xlsm):([^:]+)')
 
 g_left_file      = ''
 g_right_file     = ''
+g_left_sheet     = ''
+g_right_sheet    = ''
 g_out_path       = '.'
 g_shape_check    = True
 g_diff_lib       = True
 g_link_list      = True
+g_merge_sheet    = True
 g_log_path       = ''
 g_diff_list      = []
 g_sheets_order   = []
+g_verbose        = True
 
 
 DIFF_TYPE_SHEET       = 0
@@ -110,6 +119,11 @@ class cShapeInfo:
 
 
 
+def print_verbose(text):
+    if g_verbose:
+        print(text)
+
+
 #/*****************************************************************************/
 #/* 全角文字の数をカウント                                                    */
 #/*****************************************************************************/
@@ -128,11 +142,28 @@ def get_full_width_count_in_text(text):
 def check_command_line_option():
     global g_left_file
     global g_right_file
+    global g_left_sheet
+    global g_right_sheet
     global g_out_path
 
     sys.argv.pop(0)
     for arg in sys.argv:
-        if (os.path.isfile(arg)):
+        if (result := RE_FILE_SHEET.match(arg)):
+            file_name = result.group(1)
+            ext_name  = result.group(2)
+            sheet_name = result.group(3)
+            print_verbose(f'file:{file_name}  ext:{ext_name},  sheet:{sheet_name}')
+            if (g_left_file == ''):
+                g_left_file   = file_name + ext_name
+                g_left_sheet  = sheet_name
+            elif (g_right_file == ''):
+                g_right_file  = file_name + ext_name
+                g_right_sheet = sheet_name
+            else:
+                print("Too many args! : %s" % arg)
+                exit(0)
+
+        elif (os.path.isfile(arg)):
             if (g_left_file == ''):
                 g_left_file = arg
             elif (g_right_file == ''):
@@ -147,6 +178,11 @@ def check_command_line_option():
     if (g_left_file == '') or (g_right_file == ''):
         print("usage : cell_diff.py [file A] [file B]")
         exit(0)
+
+    if (g_left_sheet != '') and (g_right_sheet == ''):
+        g_right_sheet = g_left_sheet
+    elif (g_left_sheet == '') and (g_right_sheet != ''):
+        g_left_sheet = g_right_sheet
 
     g_out_path = os.path.dirname(g_right_file)
     if (g_out_path == ''):
@@ -324,7 +360,11 @@ def add_diff_info(type, dir, sheet_name, cell_left, val_left, cell_right, val_ri
 #/* シートの比較(行の追加、削除を検出)                                        */
 #/*****************************************************************************/
 def check_lr_sheets_ex(ws_l, ws_r):
-    print("  シート比較 : [%s]" % (ws_l.title))
+    if (ws_l.title != ws_r.title):
+        print("  シート比較 : [%s] vs [%s]" % (ws_l.title, ws_r.title))
+    else:
+        print("  シート比較 : [%s]" % (ws_l.title))
+
     left_add_rows  = []
     right_add_rows = []
 
@@ -333,10 +373,10 @@ def check_lr_sheets_ex(ws_l, ws_r):
     matcher = SequenceMatcher(None, lines_l, lines_r)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == 'equal':
-#           print(f'equal @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
+            print_verbose(f'equal @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
             continue
         elif tag == 'replace':
-#           print(f'replace @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
+            print_verbose(f'replace @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
             len_l = i2 - i1
             len_r = j2 - j1
             if (len_l > len_r):
@@ -345,11 +385,11 @@ def check_lr_sheets_ex(ws_l, ws_r):
                 right_add_rows.append(j2)
             continue
         elif tag == 'delete':
-#           print(f'delete @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
+            print_verbose(f'delete @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
             for i in range(i1, i2):
                 left_add_rows.append(i+1)
         elif tag == 'insert':
-#           print(f'insert @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
+            print_verbose(f'insert @ {i1+1}, {i2+1}, {j1+1}, {j2+1}')
             for j in range(j1, j2):
                 right_add_rows.append(j+1)
 
@@ -455,7 +495,10 @@ def check_lr_sheets_ex(ws_l, ws_r):
 #/* シートの比較                                                              */
 #/*****************************************************************************/
 def check_lr_sheets(ws_l, ws_r):
-    print("  シート比較 : [%s]" % (ws_l.title))
+    if (ws_l.title != ws_r.title):
+        print("  シート比較 : [%s] vs [%s]" % (ws_l.title, ws_r.title))
+    else:
+        print("  シート比較 : [%s]" % (ws_l.title))
 
     max_row_l = ws_l.max_row
     max_col_l = ws_l.max_column
@@ -522,16 +565,16 @@ def check_lr_sheets(ws_l, ws_r):
 #/*****************************************************************************/
 #/* 図形の情報比較                                                            */
 #/*****************************************************************************/
-def check_lr_shapes(sheet, shape_l, shape_r):
-    if sheet in shape_l.keys():
+def check_lr_shapes(sheet_l, sheet_r, shape_l, shape_r):
+    if sheet_l in shape_l.keys():
 #       print("    find l")
-        shape_info_l = shape_l[sheet]
+        shape_info_l = shape_l[sheet_l]
     else:
         shape_info_l = []
 
-    if sheet in shape_r.keys():
+    if sheet_r in shape_r.keys():
 #       print("    find r")
-        shape_info_r = shape_r[sheet]
+        shape_info_r = shape_r[sheet_r]
     else:
         shape_info_r = []
 
@@ -684,20 +727,91 @@ def append_wo_duplicate(list, item):
 
 
 #/*****************************************************************************/
+#/* ブックの比較(シート指定あり)                                              */
+#/*****************************************************************************/
+def check_lr_book_sheet(sheet_l, sheet_r):
+    ws_l    = None
+    ws_r    = None
+    shape_l = None
+    shape_r = None
+
+    if (g_left_file == g_right_file):
+        #/* 左右ファイルが同一の場合、同一ブック内のシート比較 */
+        if (g_left_sheet == '') or (g_right_sheet == ''):
+            print(f'{g_left_file}の中で比較したいシートを指定してください')
+            exit(-1)
+        elif (g_left_sheet == g_right_sheet):
+            print(f'同一シートが指定されています [{g_left_sheet}] vs [{g_right_sheet}]')
+            exit(-1)
+        else:
+            print(f"ブック内シート比較 : {g_left_file}")
+            wb_l = openpyxl.load_workbook(g_left_file,  data_only=True)
+            if g_shape_check:
+                shape_l = parse_shape_xml(g_left_file)
+                shape_r = shape_l
+
+            for ws in wb_l.worksheets:
+                if (ws.title == g_left_sheet):
+                    ws_l = ws
+                elif (ws.title == g_right_sheet):
+                    ws_r = ws
+    else:
+        print(f"シート指定比較 : [{g_left_file}:{g_left_sheet}] vs [{g_right_file}:{g_right_sheet}]")
+        wb_l = openpyxl.load_workbook(g_left_file,  data_only=True)
+        wb_r = openpyxl.load_workbook(g_right_file, data_only=True)
+
+        if g_shape_check:
+            shape_l = parse_shape_xml(g_left_file)
+            shape_r = parse_shape_xml(g_right_file)
+
+        for ws in wb_l.worksheets:
+            if (ws.title == g_left_sheet):
+                ws_l = ws
+
+        for ws in wb_r.worksheets:
+            if (ws.title == g_right_sheet):
+                ws_r = ws
+
+    if (ws_l == None):
+        print(f'シート{g_left_sheet}が見つかりません')
+        exit(-1)
+
+    if (ws_r == None):
+        print(f'シート{g_right_sheet}が見つかりません')
+        exit(-1)
+
+    if g_diff_lib:
+        check_lr_sheets_ex(ws_l, ws_r)
+    else:
+        check_lr_sheets(ws_l, ws_r)
+
+    if g_shape_check:
+        check_lr_shapes(ws_l.title, ws_r.title, shape_l, shape_r)
+
+
+#/*****************************************************************************/
 #/* ブックの比較                                                              */
 #/*****************************************************************************/
 def check_lr_books():
     global g_left_file
     global g_right_file
+    global g_left_sheet
+    global g_right_sheet
+
+    if (g_left_file == g_right_file) or (g_left_sheet != ''):
+        check_lr_book_sheet(g_left_sheet, g_right_sheet)
+        return
 
     print(f"ブック比較 : [{g_left_file}] vs [{g_right_file}]")
     wb_l = openpyxl.load_workbook(g_left_file,  data_only=True)
     wb_r = openpyxl.load_workbook(g_right_file, data_only=True)
 
+    if (g_left_sheet != ''):
+        print(f"シート指定 : [{g_left_sheet}] vs [{g_right_sheet}]")
+
     if g_shape_check:
         shape_l = parse_shape_xml(g_left_file)
         shape_r = parse_shape_xml(g_right_file)
-
 
     left_sheets  = []
     for ws_l in wb_l.worksheets:
@@ -732,7 +846,7 @@ def check_lr_books():
                         check_lr_sheets(ws_l, ws_r)
 
                     if g_shape_check:
-                        check_lr_shapes(ws_r.title, shape_l, shape_r)
+                        check_lr_shapes(ws_l.title, ws_r.title, shape_l, shape_r)
                     print('')
 
                 r_sheet_count += 1
@@ -758,7 +872,7 @@ def output_link_list():
     excel_path = g_log_path.replace('.txt', '.xlsx')
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = '差異'
+    ws.title = 'CellDiff差異'
     ws.cell(2,2).value = 'ファイル'
     ws.cell(2,4).value = g_left_file
     ws.column_dimensions['A'].width = 2
@@ -939,6 +1053,141 @@ def output_link_list():
             row += 1
 
     wb.save(excel_path)
+    wb.close()
+    return
+
+
+
+def rgb(r, g, b):
+    return r + g*256 + b*256*256
+
+
+#/*****************************************************************************/
+#/* シートごとに差分を表示                                                    */
+#/*****************************************************************************/
+def merge_sheet_diff(excel, base_sheet, work_sheet):
+    added_rows = []
+
+    for diff in [diff_info for diff_info in g_diff_list if diff_info.sheet_name == work_sheet.name]:
+#       print(f'[{work_sheet.name}] {diff.cell_left} vs {diff.cell_right}')
+#       if (diff.type == DIFF_TYPE_CELL) and (diff.dir == DIFF_DIR_DIFF):
+        if (diff.type == DIFF_TYPE_CELL):
+            print(f'[{work_sheet.name}] Cell Diff {diff.cell_left} vs {diff.cell_right}')
+            cell = work_sheet.Range(diff.cell_right)
+            if (diff.value_left != None):
+                left_val = str(diff.value_left)
+            else:
+                left_val = ''
+
+            if (cell.value != None):
+                right_val = str(cell.value)
+            else:
+                right_val = ''
+
+            cell.value = left_val + '\n⇒\n' + right_val
+            cell.Interior.Color = rgb(255, 192, 203)  # Excel標準ピンク（RGB(255, 192, 203))
+        elif (diff.type == DIFF_TYPE_LINE):
+            if (diff.dir == DIFF_DIR_ADD):
+                cell = work_sheet.Range(diff.cell_right)
+#               cell.value = diff.value_left + '\n⇒\n' + cell.value
+#               cell.Interior.Color = 16777024  # 黄色（RGB(255, 255, 64))
+                cell.Interior.Color = rgb(255, 255, 64)   # 黄色（RGB(255, 255, 64))
+            else:
+                row_l = int(diff.cell_left[1:])
+                row_r = int(diff.cell_right[1:])
+
+                if not row_r in added_rows:
+                    row_l = int(diff.cell_left[1:])
+                    row_r = int(diff.cell_right[1:])
+                    base_sheet.Rows(row_l).EntireRow.Copy()
+                    work_sheet.Rows(row_r).Insert()
+                    work_sheet.Rows(2).Value = work_sheet.Rows(2).Value
+                    added_rows.append(row_r)
+
+                cell = work_sheet.Range(diff.cell_right)
+                cell.Interior.Color = rgb(128, 128, 128)  # グレー（RGB(128, 128, 128))
+
+        
+    return
+
+
+#/*****************************************************************************/
+#/* シートの値コピー処理                                                      */
+#/*****************************************************************************/
+def copy_work_sheet_by_value(excel, work_sheet, work_book):
+    work_sheet.Copy(Before=work_book.Sheets(work_book.Sheets.Count))
+    new_sheet = excel.ActiveSheet
+    used_range = new_sheet.UsedRange
+    used_range.Value = used_range.Value  #/* 式を値に変換 */
+    return
+
+
+#/*****************************************************************************/
+#/* 変化箇所をマージしたシートの作成                                          */
+#/*****************************************************************************/
+def output_merge_sheet():
+    excel_path = os.path.abspath(g_log_path.replace('.txt', '.xlsx'))
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible       = False
+    excel.DisplayAlerts = False
+
+#   print(dir(excel))
+    if os.path.isfile(excel_path):
+        diff_wb = excel.Workbooks.Open(excel_path)
+    else:
+        diff_wb = excel.Workbooks.Add()
+
+    right_wb = excel.Workbooks.Open(os.path.abspath(g_right_file))
+    if (g_left_file != g_right_file):
+        left_wb = excel.Workbooks.Open(os.path.abspath(g_left_file))
+    else:
+        left_wb = right_wb
+
+    org_sheet = diff_wb.Sheets(1).name
+    if (g_right_sheet != ''):
+        #/* シート指定がある場合 */
+        src_sheet = right_wb.Sheets(g_right_sheet)
+        base_sheet = left_wb.Sheets(g_left_sheet)
+        if org_sheet == src_sheet.name:
+            org_sheet = '_' + org_sheet
+            diff_wb.Sheets(org_sheet).name = org_sheet
+#       src_sheet.Copy(Before=diff_wb.Sheets(diff_wb.Sheets.Count))
+        copy_work_sheet_by_value(excel, src_sheet, diff_wb)
+        merge_sheet_diff(excel, base_sheet, diff_wb.Sheets(diff_wb.Sheets.Count - 1))
+    else:
+        #/* シート指定がない場合 */
+        for i in range(0, right_wb.Worksheets.Count):
+            cell_diff = False
+            for diff in [diff_info for diff_info in g_diff_list if diff_info.sheet_name == right_wb.Sheets[i].name]:
+                if (diff.type == DIFF_TYPE_CELL):
+                    cell_diff = True
+                    break
+
+            if cell_diff:
+                src_sheet = right_wb.Sheets[i]
+                base_sheet = left_wb.Sheets(right_wb.Sheets[i].name)
+
+                if org_sheet == src_sheet.name:
+                    org_sheet = '_' + org_sheet
+                    diff_wb.Sheets(diff_wb.Sheets.Count).name = org_sheet
+#               src_sheet.Copy(Before=diff_wb.Sheets(diff_wb.Sheets.Count))
+                copy_work_sheet_by_value(excel, src_sheet, diff_wb)
+                merge_sheet_diff(excel, base_sheet, diff_wb.Sheets(diff_wb.Sheets.Count - 1))
+
+    if os.path.isfile(excel_path):
+        diff_wb.Save()
+    else:
+        #/* 新規の場合は不要なデフォルトシートを削除して保存 */
+        if (diff_wb.Sheets.Count > 1):
+            diff_wb.Sheets(diff_wb.Sheets.Count).Delete()
+
+        diff_wb.SaveAs(excel_path)
+
+    diff_wb.Close(SaveChanges=False)
+    if (g_left_file != g_right_file):
+        left_wb.Close(SaveChanges=False)
+    right_wb.Close(SaveChanges=False)
+    excel.Quit()
     return
 
 
@@ -949,12 +1198,14 @@ def main():
     check_command_line_option()
     start_time = log_start()
 
-     
 #   print("TEST1:%s" % (get_disp_string("あいうえおかきくけこ", 10)))
 #   print("TEST1:%s" % (get_disp_string("あ\nいうえおかきくけこ", 10)))
     check_lr_books()
     if g_link_list:
         output_link_list()
+
+    if g_merge_sheet:
+        output_merge_sheet()
 
     log_end(start_time)
     return
