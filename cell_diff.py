@@ -656,8 +656,11 @@ def parse_shape_xml(workbook_path):
         for sheet in wb_xml.xpath("//main:sheet", namespaces=ns):
             name = sheet.attrib["name"]
             rid = sheet.attrib["{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"]
-            path = "xl/" + rid_to_sheetxml[rid]
-            sheet_name_map[path] = name
+            if rid in rid_to_sheetxml:
+                path = "xl/" + rid_to_sheetxml[rid]
+                sheet_name_map[path] = name
+            else:
+                print(f'rid:[{rid}], name:[{name}] is missing! in {workbook_path}')
 
 #       for k, v in sheet_name_map.items():
 #           print(f"{k} → {v}")
